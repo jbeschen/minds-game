@@ -97,11 +97,22 @@ export function createObservable(
 
 // ─── Renderable (links entity to a Three.js mesh) ────────────────────────────
 
+/** All supported geometry types. Mods can extend by adding to RenderSystem. */
+export type MeshType =
+  | 'sphere' | 'cube' | 'plane'           // originals
+  | 'octahedron' | 'tetrahedron'           // crystalline
+  | 'torus' | 'torusknot'                  // organic/ethereal
+  | 'cylinder' | 'cone'                    // structural
+  | 'icosahedron' | 'dodecahedron'         // complex polyhedra
+  | 'custom';
+
 export interface RenderableComponent {
   /** Geometry type or custom mesh reference */
-  meshType: 'sphere' | 'cube' | 'plane' | 'custom';
+  meshType: MeshType;
   /** Base color (hex) */
   color: number;
+  /** Geometry scale — allows different sizes without changing transform */
+  geometryScale: number;
   /** Whether this mesh has been created in the scene */
   initialized: boolean;
   /** Three.js object UUID (set at runtime, not serialized meaningfully) */
@@ -109,10 +120,11 @@ export interface RenderableComponent {
 }
 
 export function createRenderable(
-  meshType: RenderableComponent['meshType'] = 'sphere',
-  color: number = 0xffffff
+  meshType: MeshType = 'sphere',
+  color: number = 0xffffff,
+  geometryScale = 1
 ): RenderableComponent {
-  return { meshType, color, initialized: false, meshId: null };
+  return { meshType, color, geometryScale, initialized: false, meshId: null };
 }
 
 // ─── Emotional Field (Emotion System) ─────────────────────────────────────────

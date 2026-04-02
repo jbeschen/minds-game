@@ -72,7 +72,7 @@ export class RenderSystem implements System {
 
       // Create mesh if needed
       if (!mesh) {
-        mesh = this.createMesh(renderable.meshType, renderable.color);
+        mesh = this.createMesh(renderable.meshType, renderable.color, renderable.geometryScale ?? 1);
         this.meshes.set(id, mesh);
         this.scene.add(mesh);
         renderable.initialized = true;
@@ -117,23 +117,47 @@ export class RenderSystem implements System {
     }
   }
 
-  private createMesh(type: string, color: number): THREE.Mesh {
+  private createMesh(type: string, color: number, geometryScale = 1): THREE.Mesh {
     let geometry: THREE.BufferGeometry;
+    const s = geometryScale;
 
     switch (type) {
       case 'cube':
-        geometry = new THREE.BoxGeometry(1, 1, 1);
+        geometry = new THREE.BoxGeometry(s, s, s);
         break;
       case 'plane':
-        geometry = new THREE.PlaneGeometry(10, 10);
+        geometry = new THREE.PlaneGeometry(10 * s, 10 * s);
+        break;
+      case 'octahedron':
+        geometry = new THREE.OctahedronGeometry(0.5 * s, 0);
+        break;
+      case 'tetrahedron':
+        geometry = new THREE.TetrahedronGeometry(0.5 * s, 0);
+        break;
+      case 'torus':
+        geometry = new THREE.TorusGeometry(0.35 * s, 0.15 * s, 16, 32);
+        break;
+      case 'torusknot':
+        geometry = new THREE.TorusKnotGeometry(0.3 * s, 0.1 * s, 64, 16);
+        break;
+      case 'cylinder':
+        geometry = new THREE.CylinderGeometry(0.3 * s, 0.3 * s, 1.0 * s, 16);
+        break;
+      case 'cone':
+        geometry = new THREE.ConeGeometry(0.4 * s, 1.0 * s, 16);
+        break;
+      case 'icosahedron':
+        geometry = new THREE.IcosahedronGeometry(0.5 * s, 0);
+        break;
+      case 'dodecahedron':
+        geometry = new THREE.DodecahedronGeometry(0.45 * s, 0);
         break;
       case 'sphere':
       default:
-        geometry = new THREE.SphereGeometry(0.5, 32, 32);
+        geometry = new THREE.SphereGeometry(0.5 * s, 32, 32);
         break;
     }
 
-    // Use the observation shader material — data-driven by observation level
     const material = createObservationMaterial({
       color,
       fogColor: this.fogColor,

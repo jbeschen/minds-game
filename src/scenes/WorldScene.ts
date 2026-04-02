@@ -1,9 +1,20 @@
 /**
  * WorldScene — The main game world, initialized from a seed.
  *
- * Extracts the world setup from main.ts into a reusable module.
- * The seed biases what entities spawn, their observation levels,
- * and the emotional tone of the starting environment.
+ * World layout:
+ *   - Near ring (3-5m): Starter entities, easy discovery, teaches the gaze mechanic
+ *   - Mid ring (6-10m): Deliberate observation needed, varied categories
+ *   - Far ring (11-18m): Challenging, requires sustained focus and momentum
+ *   - Hidden: Chained discovery — only appear after observing prerequisites
+ *
+ * Entity categories:
+ *   - Organic: Soft, rounded forms (spheres, torus). Breathe and flow.
+ *   - Crystalline: Sharp, geometric (octahedron, tetrahedron). Refract and fracture.
+ *   - Ethereal: Barely there (small spheres, icosahedrons). Shimmer and flutter.
+ *   - Structural: Grounded, solid (cubes, cylinders, cones). Anchor reality.
+ *   - Hidden: Only visible after chain discovery. Reward deep observation.
+ *
+ * Seeds bias which entities are near-coherence vs deeply-hidden via tag matching.
  */
 
 import * as THREE from 'three';
@@ -12,49 +23,178 @@ import { RenderSystem } from '../systems/RenderSystem';
 import { PerceptionSystem } from '../systems/PerceptionSystem';
 import { SeedConfig } from '../systems/SeedSystem';
 import {
+  MeshType,
   createTransform,
   createObservable,
   createRenderable,
 } from '../components';
 
-// ─── Entity tag definitions (used by seed perception biases) ─────────────────
+// ─── Entity Definition Format ────────────────────────────────────────────────
 
 interface EntityDef {
-  x: number;
-  y: number;
-  z: number;
+  name: string;               // For debugging and chained discovery
+  x: number; y: number; z: number;
   color: number;
-  meshType: 'sphere' | 'cube';
+  meshType: MeshType;
+  geometryScale?: number;     // Default 1
   decayRate: number;
   gainRate: number;
   revealThreshold: number;
   tags: string[];
+  /** If set, this entity only spawns after ALL named entities are discovered */
+  requiresDiscovery?: string[];
 }
 
-/** The full set of entities for the Awakening story. Seeds bias which are visible. */
+// ─── Awakening World Entities ────────────────────────────────────────────────
+
 const AWAKENING_ENTITIES: EntityDef[] = [
-  // ─── Warm / Fire / Energy cluster
-  { x: 3, y: 1, z: -5, color: 0xff6b35, meshType: 'sphere', decayRate: 0.05, gainRate: 0.15, revealThreshold: 0.5, tags: ['warm', 'energy', 'light'] },
-  { x: 4, y: 0.5, z: -6, color: 0xff8c42, meshType: 'cube', decayRate: 0.05, gainRate: 0.15, revealThreshold: 0.5, tags: ['warm', 'structure', 'heat'] },
-  { x: 2.5, y: 1.5, z: -7, color: 0xffad69, meshType: 'sphere', decayRate: 0.03, gainRate: 0.2, revealThreshold: 0.4, tags: ['warm', 'light', 'energy'] },
 
-  // ─── Cool / Flow / Depth cluster
-  { x: -4, y: 1, z: -8, color: 0x4ecdc4, meshType: 'sphere', decayRate: 0.05, gainRate: 0.15, revealThreshold: 0.5, tags: ['flow', 'depth', 'reflection'] },
-  { x: -3, y: 2, z: -7, color: 0x45b7aa, meshType: 'cube', decayRate: 0.05, gainRate: 0.15, revealThreshold: 0.5, tags: ['flow', 'structure'] },
-  { x: -5, y: 0.8, z: -9, color: 0x2ecc71, meshType: 'sphere', decayRate: 0.04, gainRate: 0.12, revealThreshold: 0.6, tags: ['depth', 'stillness'] },
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NEAR RING (3-5m) — Starter entities, low thresholds, fast gain
+  // The player's first discoveries. Teaches the "look at things" mechanic.
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  // ─── Shadow / Void / Mystery cluster
-  { x: 0, y: 3, z: -15, color: 0x9b59b6, meshType: 'sphere', decayRate: 0.02, gainRate: 0.08, revealThreshold: 0.7, tags: ['shadow', 'hidden', 'silence'] },
-  { x: 8, y: 1, z: -12, color: 0xe74c3c, meshType: 'cube', decayRate: 0.06, gainRate: 0.1, revealThreshold: 0.5, tags: ['energy', 'chaos', 'instinct'] },
-  { x: -7, y: 2, z: -14, color: 0xf1c40f, meshType: 'sphere', decayRate: 0.03, gainRate: 0.09, revealThreshold: 0.65, tags: ['pattern', 'light', 'connection'] },
+  // Welcoming sphere — the first thing most players will discover
+  { name: 'welcome-light', x: 0.5, y: 0.8, z: -3, color: 0xecf0f1,
+    meshType: 'sphere', decayRate: 0.06, gainRate: 0.3, revealThreshold: 0.25,
+    tags: ['surface', 'light'] },
 
-  // ─── Pattern / Structure cluster
-  { x: 5, y: 1.5, z: -10, color: 0xdaa520, meshType: 'cube', decayRate: 0.04, gainRate: 0.12, revealThreshold: 0.55, tags: ['pattern', 'structure', 'connection'] },
-  { x: -6, y: 1, z: -11, color: 0x8e44ad, meshType: 'sphere', decayRate: 0.03, gainRate: 0.1, revealThreshold: 0.6, tags: ['shadow', 'emotion', 'depth'] },
+  // Grounding cube — solid, structural, close
+  { name: 'ground-block', x: -1.2, y: 0.5, z: -3.5, color: 0xbdc3c7,
+    meshType: 'cube', decayRate: 0.06, gainRate: 0.25, revealThreshold: 0.3,
+    tags: ['surface', 'structure', 'sound'] },
 
-  // ─── Near / Starter objects
-  { x: 1, y: 0.5, z: -3, color: 0xecf0f1, meshType: 'sphere', decayRate: 0.08, gainRate: 0.3, revealThreshold: 0.3, tags: ['surface', 'light'] },
-  { x: -1, y: 0.8, z: -4, color: 0xbdc3c7, meshType: 'cube', decayRate: 0.07, gainRate: 0.25, revealThreshold: 0.35, tags: ['surface', 'sound'] },
+  // Small curious orb — off to the side, rewards peripheral vision
+  { name: 'curious-mote', x: 2.5, y: 0.4, z: -2.5, color: 0xe8d5b7,
+    meshType: 'icosahedron', geometryScale: 0.6, decayRate: 0.08, gainRate: 0.35, revealThreshold: 0.2,
+    tags: ['surface', 'warm', 'light'] },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MID RING — ORGANIC cluster (5-9m, left side)
+  // Soft, flowing, warm. Spheres and tori.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  { name: 'ember-heart', x: 3, y: 1.0, z: -6, color: 0xff6b35,
+    meshType: 'sphere', geometryScale: 1.2, decayRate: 0.05, gainRate: 0.15, revealThreshold: 0.45,
+    tags: ['warm', 'energy', 'light'] },
+
+  { name: 'flame-ring', x: 4.5, y: 0.7, z: -7, color: 0xff8c42,
+    meshType: 'torus', decayRate: 0.05, gainRate: 0.14, revealThreshold: 0.5,
+    tags: ['warm', 'flow', 'energy'] },
+
+  { name: 'warmth-bloom', x: 2, y: 1.8, z: -7.5, color: 0xffad69,
+    meshType: 'sphere', geometryScale: 0.8, decayRate: 0.04, gainRate: 0.18, revealThreshold: 0.4,
+    tags: ['warm', 'light', 'energy'] },
+
+  { name: 'kindling-knot', x: 3.5, y: 0.4, z: -5, color: 0xe67e22,
+    meshType: 'torusknot', geometryScale: 0.7, decayRate: 0.05, gainRate: 0.13, revealThreshold: 0.5,
+    tags: ['warm', 'chaos', 'instinct'] },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MID RING — CRYSTALLINE cluster (5-9m, right side)
+  // Sharp, precise, structured. Octahedrons and tetrahedrons.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  { name: 'lattice-shard', x: -4, y: 1.2, z: -6, color: 0xf1c40f,
+    meshType: 'octahedron', decayRate: 0.04, gainRate: 0.14, revealThreshold: 0.5,
+    tags: ['pattern', 'structure', 'light'] },
+
+  { name: 'order-spike', x: -3, y: 2.0, z: -7.5, color: 0xdaa520,
+    meshType: 'tetrahedron', geometryScale: 1.3, decayRate: 0.04, gainRate: 0.12, revealThreshold: 0.55,
+    tags: ['pattern', 'structure', 'connection'] },
+
+  { name: 'facet-gem', x: -5, y: 0.6, z: -5.5, color: 0xe5c07b,
+    meshType: 'dodecahedron', geometryScale: 0.8, decayRate: 0.05, gainRate: 0.16, revealThreshold: 0.45,
+    tags: ['pattern', 'light', 'reflection'] },
+
+  { name: 'crystal-pillar', x: -3.5, y: 1.0, z: -8.5, color: 0xc9b458,
+    meshType: 'cylinder', geometryScale: 0.9, decayRate: 0.04, gainRate: 0.11, revealThreshold: 0.55,
+    tags: ['structure', 'rigidity', 'pattern'] },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MID RING — FLOW / DEPTH cluster (6-9m, rear-center)
+  // Cool, calm, reflective. The water/depth entities.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  { name: 'tide-sphere', x: -1, y: 1.0, z: -8, color: 0x4ecdc4,
+    meshType: 'sphere', geometryScale: 1.1, decayRate: 0.05, gainRate: 0.13, revealThreshold: 0.5,
+    tags: ['flow', 'depth', 'reflection'] },
+
+  { name: 'depth-ring', x: 0.5, y: 0.5, z: -9, color: 0x45b7aa,
+    meshType: 'torus', geometryScale: 1.2, decayRate: 0.04, gainRate: 0.11, revealThreshold: 0.55,
+    tags: ['flow', 'depth', 'stillness'] },
+
+  { name: 'still-drop', x: -2, y: 0.3, z: -7, color: 0x2ecc71,
+    meshType: 'sphere', geometryScale: 0.6, decayRate: 0.04, gainRate: 0.15, revealThreshold: 0.5,
+    tags: ['depth', 'stillness', 'reflection'] },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FAR RING (11-18m) — Challenging, requires sustained focus
+  // These are the mystery objects. Slow gain, high thresholds.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  { name: 'void-sentinel', x: 0, y: 3.5, z: -16, color: 0x9b59b6,
+    meshType: 'octahedron', geometryScale: 1.5, decayRate: 0.02, gainRate: 0.07, revealThreshold: 0.7,
+    tags: ['shadow', 'hidden', 'silence'] },
+
+  { name: 'chaos-ember', x: 9, y: 1.2, z: -13, color: 0xe74c3c,
+    meshType: 'torusknot', geometryScale: 0.9, decayRate: 0.05, gainRate: 0.09, revealThreshold: 0.6,
+    tags: ['energy', 'chaos', 'instinct', 'heat'] },
+
+  { name: 'distant-beacon', x: -8, y: 2.5, z: -15, color: 0xf39c12,
+    meshType: 'dodecahedron', geometryScale: 1.2, decayRate: 0.03, gainRate: 0.08, revealThreshold: 0.65,
+    tags: ['pattern', 'light', 'connection'] },
+
+  { name: 'shadow-monolith', x: 6, y: 2.0, z: -14, color: 0x5b2c6f,
+    meshType: 'cylinder', geometryScale: 1.8, decayRate: 0.02, gainRate: 0.06, revealThreshold: 0.75,
+    tags: ['shadow', 'structure', 'silence'] },
+
+  { name: 'deep-resonance', x: -5, y: 1.0, z: -17, color: 0x1abc9c,
+    meshType: 'sphere', geometryScale: 1.4, decayRate: 0.02, gainRate: 0.07, revealThreshold: 0.7,
+    tags: ['depth', 'flow', 'emotion'] },
+
+  { name: 'far-whisper', x: 3, y: 0.8, z: -18, color: 0x8e44ad,
+    meshType: 'icosahedron', geometryScale: 0.9, decayRate: 0.03, gainRate: 0.06, revealThreshold: 0.7,
+    tags: ['shadow', 'emotion', 'hidden'] },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ETHEREAL — scattered throughout, barely-there, small, reward sharp eyes
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  { name: 'mote-alpha', x: 1.5, y: 2.5, z: -5.5, color: 0xd5dbdb,
+    meshType: 'icosahedron', geometryScale: 0.35, decayRate: 0.1, gainRate: 0.2, revealThreshold: 0.35,
+    tags: ['light', 'surface'] },
+
+  { name: 'mote-beta', x: -2.5, y: 3.0, z: -10, color: 0xaeb6bf,
+    meshType: 'icosahedron', geometryScale: 0.3, decayRate: 0.08, gainRate: 0.15, revealThreshold: 0.45,
+    tags: ['silence', 'shadow'] },
+
+  { name: 'mote-gamma', x: 5, y: 2.0, z: -8, color: 0xfad7a0,
+    meshType: 'icosahedron', geometryScale: 0.4, decayRate: 0.09, gainRate: 0.18, revealThreshold: 0.4,
+    tags: ['warm', 'light'] },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HIDDEN — Chained discovery. Only spawn after prerequisites are found.
+  // These are the "reward" entities. Finding them feels like unlocking a secret.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Appears between the organic and crystalline clusters after you discover one from each
+  { name: 'synthesis-arch', x: 0, y: 1.5, z: -6.5, color: 0xf0e68c,
+    meshType: 'torusknot', geometryScale: 1.0, decayRate: 0.03, gainRate: 0.12, revealThreshold: 0.5,
+    tags: ['pattern', 'connection', 'warm'],
+    requiresDiscovery: ['ember-heart', 'lattice-shard'] },
+
+  // Appears near the void sentinel once you've found the shadow monolith
+  { name: 'void-mirror', x: 1, y: 3.0, z: -15, color: 0xbb8fce,
+    meshType: 'dodecahedron', geometryScale: 1.1, decayRate: 0.02, gainRate: 0.1, revealThreshold: 0.6,
+    tags: ['shadow', 'reflection', 'hidden'],
+    requiresDiscovery: ['shadow-monolith', 'void-sentinel'] },
+
+  // The "heart" of the world — appears only after discovering entities from 3+ categories
+  { name: 'world-heart', x: 0, y: 1.2, z: -10, color: 0xffffff,
+    meshType: 'icosahedron', geometryScale: 1.5, decayRate: 0.01, gainRate: 0.1, revealThreshold: 0.4,
+    tags: ['connection', 'light', 'depth', 'pattern'],
+    requiresDiscovery: ['ember-heart', 'lattice-shard', 'tide-sphere'] },
 ];
 
 // ─── WorldScene ──────────────────────────────────────────────────────────────
@@ -67,6 +207,15 @@ export class WorldScene {
 
   private seed: SeedConfig;
 
+  /** Map entity name → ECS entity ID (for chained discovery) */
+  private entityNameMap: Map<string, number> = new Map();
+  /** Set of discovered entity names */
+  private discoveredNames: Set<string> = new Set();
+  /** Pending chained entities waiting to be spawned */
+  private pendingChained: EntityDef[] = [];
+  /** Reverse map: entity ID → name */
+  private entityIdToName: Map<number, string> = new Map();
+
   constructor(seed: SeedConfig) {
     this.seed = seed;
 
@@ -77,7 +226,7 @@ export class WorldScene {
     // ─── Three.js scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0a0f);
-    this.scene.fog = new THREE.FogExp2(0x0a0a0f, 0.03);
+    this.scene.fog = new THREE.FogExp2(0x0a0a0f, 0.025);
 
     // Lighting — tinted by seed emotion
     const emotionColor = this.emotionToAmbientColor(seed.emotion.worldVector);
@@ -88,6 +237,11 @@ export class WorldScene {
     dirLight.position.set(5, 10, 5);
     this.scene.add(dirLight);
 
+    // Subtle secondary fill light (opposite side, tinted)
+    const fillLight = new THREE.DirectionalLight(emotionColor, 0.2);
+    fillLight.position.set(-5, 3, -5);
+    this.scene.add(fillLight);
+
     // ─── Camera
     this.playerCamera = new FirstPersonCamera();
     this.scene.add(this.playerCamera.body);
@@ -97,32 +251,81 @@ export class WorldScene {
     this.world.registerSystem(new RenderSystem(this.scene));
 
     // ─── Ground
-    const groundGeo = new THREE.PlaneGeometry(100, 100);
-    const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x1a1a2e,
-      roughness: 0.9,
-    });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.01;
-    this.scene.add(ground);
+    this.buildTerrain();
 
     // ─── Spawn entities biased by seed
     this.spawnEntities();
 
-    // ─── Emit seed_selected so any system can read it
-    this.events.emit('seed_selected', {
-      seedId: seed.id,
-      seed,
+    // ─── Listen for discovery events (for chained spawning)
+    this.events.on('perception:entity_discovered', (e) => {
+      const name = this.entityIdToName.get(e.entityId);
+      if (name) {
+        this.discoveredNames.add(name);
+        this.checkChainedSpawns();
+      }
     });
 
+    // ─── Emit seed_selected so any system can read it
+    this.events.emit('seed_selected', { seedId: seed.id, seed });
+
     // ─── Debug logging
-    this.events.on('entity_discovered', (e) => {
-      console.log(`✦ Entity ${e.entityId} discovered! (observation: ${e.observationLevel.toFixed(2)})`);
+    this.events.on('perception:entity_discovered', (e) => {
+      const name = this.entityIdToName.get(e.entityId) ?? '?';
+      console.log(`✦ Discovered "${name}" (observation: ${e.observationLevel.toFixed(2)})`);
     });
 
     // ─── Save/Load
     document.addEventListener('keydown', this.handleSaveLoad);
+  }
+
+  // ─── Terrain ───────────────────────────────────────────────────────────────
+
+  private buildTerrain(): void {
+    // Main ground plane
+    const groundGeo = new THREE.PlaneGeometry(120, 120, 32, 32);
+
+    // Subtle terrain undulation
+    const positions = groundGeo.attributes.position;
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const y = positions.getY(i);
+      // Gentle rolling hills
+      const height =
+        Math.sin(x * 0.08) * Math.cos(y * 0.06) * 0.4 +
+        Math.sin(x * 0.15 + 1.3) * Math.cos(y * 0.12 + 0.7) * 0.2;
+      positions.setZ(i, height);
+    }
+    groundGeo.computeVertexNormals();
+
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a2e,
+      roughness: 0.95,
+      metalness: 0.05,
+    });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    this.scene.add(ground);
+
+    // Fog pillars — tall, faint silhouettes at the edges of the world
+    // These are non-observable landmarks that give a sense of scale
+    const pillarPositions = [
+      [15, 0, -20], [-18, 0, -15], [20, 0, -8],
+      [-12, 0, -25], [8, 0, -28], [-22, 0, -22],
+    ];
+    for (const [px, _py, pz] of pillarPositions) {
+      const height = 4 + Math.random() * 6;
+      const geo = new THREE.CylinderGeometry(0.3, 0.5, height, 6);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x12122a,
+        roughness: 1,
+        transparent: true,
+        opacity: 0.25,
+      });
+      const pillar = new THREE.Mesh(geo, mat);
+      pillar.position.set(px, height / 2 - 0.5, pz);
+      this.scene.add(pillar);
+    }
   }
 
   // ─── Seed-biased entity spawning ───────────────────────────────────────────
@@ -131,43 +334,84 @@ export class WorldScene {
     const { nearCoherence, deeplyHidden, gainModifier } = this.seed.perception;
 
     for (const def of AWAKENING_ENTITIES) {
-      const entity = this.world.createEntity();
-      this.world.addComponent(entity, 'transform', createTransform(def.x, def.y, def.z));
-      this.world.addComponent(entity, 'renderable', createRenderable(def.meshType, def.color));
-
-      // Bias observation based on seed tags
-      let startingObservation = 0;
-      let adjustedGain = def.gainRate * gainModifier;
-      let adjustedDecay = def.decayRate;
-      let adjustedThreshold = def.revealThreshold;
-
-      const hasNearTag = def.tags.some((t) => nearCoherence.includes(t));
-      const hasHiddenTag = def.tags.some((t) => deeplyHidden.includes(t));
-
-      if (hasNearTag) {
-        // Near-coherence entities start partially visible and are easier to observe
-        startingObservation = 0.15 + Math.random() * 0.15;
-        adjustedGain *= 1.3;
-        adjustedThreshold *= 0.85;
+      // Chained entities are deferred
+      if (def.requiresDiscovery && def.requiresDiscovery.length > 0) {
+        this.pendingChained.push(def);
+        continue;
       }
 
-      if (hasHiddenTag) {
-        // Deeply hidden entities are harder to find
-        startingObservation = 0;
-        adjustedDecay *= 1.4;
-        adjustedThreshold = Math.min(0.9, adjustedThreshold * 1.2);
-      }
+      this.spawnEntity(def, nearCoherence, deeplyHidden, gainModifier);
+    }
+  }
 
-      const observable = createObservable(adjustedDecay, adjustedGain, adjustedThreshold);
-      observable.observationLevel = startingObservation;
-      this.world.addComponent(entity, 'observable', observable);
+  private spawnEntity(
+    def: EntityDef,
+    nearCoherence: string[],
+    deeplyHidden: string[],
+    gainModifier: number
+  ): void {
+    const entity = this.world.createEntity();
+    this.entityNameMap.set(def.name, entity);
+    this.entityIdToName.set(entity, def.name);
+
+    this.world.addComponent(entity, 'transform', createTransform(def.x, def.y, def.z));
+    this.world.addComponent(entity, 'renderable',
+      createRenderable(def.meshType, def.color, def.geometryScale ?? 1));
+
+    // Bias observation based on seed tags
+    let startingObservation = 0;
+    let adjustedGain = def.gainRate * gainModifier;
+    let adjustedDecay = def.decayRate;
+    let adjustedThreshold = def.revealThreshold;
+
+    const hasNearTag = def.tags.some((t) => nearCoherence.includes(t));
+    const hasHiddenTag = def.tags.some((t) => deeplyHidden.includes(t));
+
+    if (hasNearTag) {
+      startingObservation = 0.12 + Math.random() * 0.15;
+      adjustedGain *= 1.3;
+      adjustedThreshold *= 0.85;
+    }
+
+    if (hasHiddenTag) {
+      startingObservation = 0;
+      adjustedDecay *= 1.4;
+      adjustedThreshold = Math.min(0.9, adjustedThreshold * 1.2);
+    }
+
+    const observable = createObservable(adjustedDecay, adjustedGain, adjustedThreshold);
+    observable.observationLevel = startingObservation;
+    this.world.addComponent(entity, 'observable', observable);
+  }
+
+  // ─── Chained discovery ─────────────────────────────────────────────────────
+
+  private checkChainedSpawns(): void {
+    const { nearCoherence, deeplyHidden, gainModifier } = this.seed.perception;
+
+    const toSpawn: EntityDef[] = [];
+    const remaining: EntityDef[] = [];
+
+    for (const def of this.pendingChained) {
+      const allMet = def.requiresDiscovery!.every((name) => this.discoveredNames.has(name));
+      if (allMet) {
+        toSpawn.push(def);
+      } else {
+        remaining.push(def);
+      }
+    }
+
+    this.pendingChained = remaining;
+
+    for (const def of toSpawn) {
+      console.log(`✧ Chain unlocked: "${def.name}" has materialized!`);
+      this.spawnEntity(def, nearCoherence, deeplyHidden, gainModifier);
     }
   }
 
   // ─── Emotion → ambient color ───────────────────────────────────────────────
 
   private emotionToAmbientColor(vector: number[]): number {
-    // [warmth, tension, curiosity, awe, melancholy, energy]
     const r = Math.floor((0.25 + vector[0] * 0.15 + vector[5] * 0.05) * 255);
     const g = Math.floor((0.25 + vector[2] * 0.1 + vector[3] * 0.1) * 255);
     const b = Math.floor((0.35 + vector[4] * 0.1 + vector[3] * 0.1) * 255);
@@ -199,6 +443,7 @@ export class WorldScene {
       const save = JSON.stringify({
         seedId: this.seed.id,
         world: this.world.serialize(),
+        discoveredNames: [...this.discoveredNames],
       });
       localStorage.setItem('minds_save', save);
       console.log('💾 World saved');
@@ -209,6 +454,12 @@ export class WorldScene {
       if (raw) {
         const save = JSON.parse(raw);
         this.world.deserialize(save.world);
+        if (save.discoveredNames) {
+          for (const name of save.discoveredNames) {
+            this.discoveredNames.add(name);
+          }
+          this.checkChainedSpawns();
+        }
         console.log('📂 World loaded');
       }
     }
