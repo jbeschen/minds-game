@@ -15,6 +15,11 @@
  *   - Hidden: Only visible after chain discovery. Reward deep observation.
  *
  * Seeds bias which entities are near-coherence vs deeply-hidden via tag matching.
+ *
+ * Environmental progression:
+ *   - Fog recedes as discoveries accumulate
+ *   - Ambient light brightens with discovery milestones
+ *   - Scene background shifts from void-black toward seed-tinted color
  */
 
 import * as THREE from 'three';
@@ -29,6 +34,7 @@ import {
   createObservable,
   createRenderable,
 } from '../components';
+import { updateSeedProgress, getSeedProgress } from '../systems/SeedProgress';
 
 // ─── Entity Definition Format ────────────────────────────────────────────────
 
@@ -217,8 +223,35 @@ export class WorldScene {
   /** Reverse map: entity ID → name */
   private entityIdToName: Map<number, string> = new Map();
 
+  /** Discovery count for environmental progression */
+  private discoveredCount = 0;
+  private totalSpawnable = 0;
+
+  /** Environmental references for progressive reveal */
+  private ambientLight: THREE.AmbientLight;
+  private dirLight: THREE.DirectionalLight;
+  private fillLight: THREE.DirectionalLight;
+  private fog: THREE.FogExp2;
+  private seedEmotionColor: THREE.Color;
+
+  /** Initial environment values (to interpolate from) */
+  private readonly initialFogDensity = 0.025;
+  private readonly minFogDensity = 0.008;
+  private readonly initialAmbientIntensity = 0.4;
+  private readonly maxAmbientIntensity = 1.0;
+  private readonly initialDirIntensity = 0.6;
+  private readonly maxDirIntensity = 1.2;
+
+  /** Playtime tracking */
+  private playtime = 0;
+
+  /** Save/load notification element */
+  private notificationEl: HTMLDivElement | null = null;
+  private notificationTimeout: ReturnType<typeof setTimeout> | null = null;
+
   constructor(seed: SeedConfig) {
     this.seed = seed;
+    this.totalSpawnable = AWAKENING_ENTITIES.length;
 
     // ─── Core
     this.events = new EventBus();
@@ -227,21 +260,23 @@ export class WorldScene {
     // ─── Three.js scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0a0f);
-    this.scene.fog = new THREE.FogExp2(0x0a0a0f, 0.025);
+    this.fog = new THREE.FogExp2(0x0a0a0f, this.initialFogDensity);
+    this.scene.fog = this.fog;
 
     // Lighting — tinted by seed emotion
-    const emotionColor = this.emotionToAmbientColor(seed.emotion.worldVector);
-    const ambientLight = new THREE.AmbientLight(emotionColor, 0.4);
-    this.scene.add(ambientLight);
+    this.seedEmotionColor = new THREE.Color(this.emotionToAmbientColor(seed.emotion.worldVector));
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-    dirLight.position.set(5, 10, 5);
-    this.scene.add(dirLight);
+    this.ambientLight = new THREE.AmbientLight(this.seedEmotionColor, this.initialAmbientIntensity);
+    this.scene.add(this.ambientLight);
+
+    this.dirLight = new THREE.DirectionalLight(0xffffff, this.initialDirIntensity);
+    this.dirLight.position.set(5, 10, 5);
+    this.scene.add(this.dirLight);
 
     // Subtle secondary fill light (opposite side, tinted)
-    const fillLight = new THREE.DirectionalLight(emotionColor, 0.2);
-    fillLight.position.set(-5, 3, -5);
-    this.scene.add(fillLight);
+    this.fillLight = new THREE.DirectionalLight(this.seedEmotionColor, 0.2);
+    this.fillLight.position.set(-5, 3, -5);
+    this.scene.add(this.fillLight);
 
     // ─── Camera
     this.playerCamera = new FirstPersonCamera();
@@ -258,11 +293,13 @@ export class WorldScene {
     // ─── Spawn entities biased by seed
     this.spawnEntities();
 
-    // ─── Listen for discovery events (for chained spawning)
+    // ─── Listen for discovery events (for chained spawning + environment)
     this.events.on('perception:entity_discovered', (e) => {
       const name = this.entityIdToName.get(e.entityId);
       if (name) {
         this.discoveredNames.add(name);
+        this.discoveredCount++;
+        this.updateEnvironment();
         this.checkChainedSpawns();
       }
     });
@@ -273,11 +310,23 @@ export class WorldScene {
     // ─── Debug logging
     this.events.on('perception:entity_discovered', (e) => {
       const name = this.entityIdToName.get(e.entityId) ?? '?';
-      console.log(`✦ Discovered "${name}" (observation: ${e.observationLevel.toFixed(2)})`);
+      console.log(`✦ Discovered "${name}" (observation: ${e.observationLevel.toFixed(2)}) [${this.discoveredCount}/${this.totalSpawnable}]`);
     });
 
     // ─── Save/Load
     document.addEventListener('keydown', this.handleSaveLoad);
+
+    // ─── Create notification element
+    this.createNotificationEl();
+
+    // ─── Load previous progress for this seed
+    const prev = getSeedProgress(seed.id);
+    this.playtime = prev.playtime;
+    updateSeedProgress(seed.id, {
+      visits: prev.visits + 1,
+      lastVisited: Date.now(),
+      total: this.totalSpawnable,
+    });
   }
 
   // ─── Terrain ───────────────────────────────────────────────────────────────
@@ -411,6 +460,47 @@ export class WorldScene {
     }
   }
 
+  // ─── Environmental progression ─────────────────────────────────────────────
+
+  /**
+   * As the player discovers more, the world itself responds:
+   *   - Fog recedes (you can see farther)
+   *   - Ambient light brightens (the void retreats)
+   *   - Background color shifts toward the seed's emotional tint
+   *
+   * This makes discovery feel like it *matters* — you're not just finding objects,
+   * you're literally bringing light to the world.
+   */
+  private updateEnvironment(): void {
+    const ratio = this.discoveredCount / this.totalSpawnable;
+
+    // Fog recedes: dense void → clearer air
+    const fogDensity = this.initialFogDensity - (this.initialFogDensity - this.minFogDensity) * ratio;
+    this.fog.density = fogDensity;
+
+    // Ambient light strengthens
+    const ambientIntensity = this.initialAmbientIntensity +
+      (this.maxAmbientIntensity - this.initialAmbientIntensity) * ratio;
+    this.ambientLight.intensity = ambientIntensity;
+
+    // Directional light strengthens
+    const dirIntensity = this.initialDirIntensity +
+      (this.maxDirIntensity - this.initialDirIntensity) * ratio;
+    this.dirLight.intensity = dirIntensity;
+
+    // Fill light grows
+    this.fillLight.intensity = 0.2 + ratio * 0.4;
+
+    // Background color shifts from void-black toward a faint seed tint
+    const bgColor = new THREE.Color(0x0a0a0f);
+    const targetBg = this.seedEmotionColor.clone().multiplyScalar(0.15);
+    bgColor.lerp(targetBg, ratio);
+    (this.scene.background as THREE.Color).copy(bgColor);
+
+    // Fog color also shifts slightly toward warmth
+    this.fog.color.copy(bgColor);
+  }
+
   // ─── Emotion → ambient color ───────────────────────────────────────────────
 
   private emotionToAmbientColor(vector: number[]): number {
@@ -425,6 +515,7 @@ export class WorldScene {
   update(dt: number): void {
     this.playerCamera.update(dt);
     this.world.update(dt);
+    this.playtime += dt;
   }
 
   render(renderer: THREE.WebGLRenderer): void {
@@ -446,9 +537,11 @@ export class WorldScene {
         seedId: this.seed.id,
         world: this.world.serialize(),
         discoveredNames: [...this.discoveredNames],
+        camera: this.playerCamera.getState(),
       });
       localStorage.setItem('minds_save', save);
       console.log('💾 World saved');
+      this.showNotification('World saved', '#4ecdc4');
     }
     if (e.code === 'F9') {
       e.preventDefault();
@@ -456,25 +549,103 @@ export class WorldScene {
       if (raw) {
         const save = JSON.parse(raw);
         this.world.deserialize(save.world);
+
+        // Restore discovered names
         if (save.discoveredNames) {
+          this.discoveredNames.clear();
+          this.discoveredCount = 0;
           for (const name of save.discoveredNames) {
             this.discoveredNames.add(name);
+            this.discoveredCount++;
           }
+          this.updateEnvironment();
           this.checkChainedSpawns();
         }
+
+        // Restore camera position and orientation
+        if (save.camera) {
+          this.playerCamera.setState(save.camera);
+        }
+
         console.log('📂 World loaded');
+        this.showNotification('World loaded', '#f39c12');
+      } else {
+        this.showNotification('No save found', '#e74c3c');
       }
     }
   };
+
+  // ─── Notification UI ───────────────────────────────────────────────────────
+
+  private createNotificationEl(): void {
+    this.notificationEl = document.createElement('div');
+    Object.assign(this.notificationEl.style, {
+      position: 'fixed',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      padding: '12px 28px',
+      fontFamily: 'Georgia, serif',
+      fontSize: '1.1rem',
+      letterSpacing: '0.1em',
+      borderRadius: '4px',
+      background: 'rgba(0, 0, 0, 0.7)',
+      border: '1px solid rgba(255, 255, 255, 0.1)',
+      zIndex: '200',
+      pointerEvents: 'none',
+      opacity: '0',
+      transition: 'opacity 0.3s ease',
+    });
+    document.body.appendChild(this.notificationEl);
+  }
+
+  private showNotification(text: string, color: string): void {
+    if (!this.notificationEl) return;
+    if (this.notificationTimeout) clearTimeout(this.notificationTimeout);
+
+    this.notificationEl.textContent = text;
+    this.notificationEl.style.color = color;
+    this.notificationEl.style.borderColor = color + '44';
+    this.notificationEl.style.opacity = '1';
+
+    this.notificationTimeout = setTimeout(() => {
+      if (this.notificationEl) {
+        this.notificationEl.style.opacity = '0';
+      }
+    }, 1200);
+  }
 
   // ─── Cleanup ───────────────────────────────────────────────────────────────
 
   dispose(): void {
     document.removeEventListener('keydown', this.handleSaveLoad);
+    if (this.notificationEl) {
+      document.body.removeChild(this.notificationEl);
+    }
+
+    // Destroy all ECS systems (stops audio oscillators, cleans up meshes)
+    this.world.removeSystem('audio');
+    this.world.removeSystem('render');
+    this.world.removeSystem('perception');
+
+    // Persist seed progress for constellation display
+    updateSeedProgress(this.seed.id, {
+      discovered: this.discoveredCount,
+      total: this.totalSpawnable,
+      playtime: this.playtime,
+    });
   }
 
   /** Getters for HUD */
   get entityCount(): number {
     return this.world.getAllEntities().length;
+  }
+
+  get discovered(): number {
+    return this.discoveredCount;
+  }
+
+  get totalEntities(): number {
+    return this.totalSpawnable;
   }
 }

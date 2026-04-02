@@ -5,25 +5,36 @@
  * that sets the initial resonance of reality. The player chooses by looking
  * and clicking, guided only by intuition and visual attraction.
  *
+ * Visual state reflects exploration progress:
+ *   - Unvisited seed: Dense fuzz cloud, many orbiting particles (uncollapsed potential)
+ *   - Partially explored: Fuzz thins, particles reduce, core brightens
+ *   - Fully discovered: Solid, clean form. All fuzz gone. Collapsed into reality.
+ *
  * This IS the parable: your first choice shapes your reality,
  * and you make it based on feeling, not information.
  */
 
 import * as THREE from 'three';
 import { SeedConfig, AWAKENING_SEEDS } from '../systems/SeedSystem';
+import { loadSeedProgress, AllSeedProgress, SeedProgressData } from '../systems/SeedProgress';
 
 // ─── Orb wrapper ─────────────────────────────────────────────────────────────
 
 interface OrbInstance {
   seed: SeedConfig;
+  progress: SeedProgressData;
+  /** Discovery ratio 0..1 */
+  discoveryRatio: number;
   /** The outer glow sphere */
   glowMesh: THREE.Mesh;
   /** The inner core sphere */
   coreMesh: THREE.Mesh;
-  /** Group containing both */
+  /** Group containing everything */
   group: THREE.Group;
-  /** Particle ring */
-  particles: THREE.Points;
+  /** Entity particles — count represents undiscovered entities */
+  entityParticles: THREE.Points;
+  /** Fuzz cloud — dissolves with discovery */
+  fuzzCloud: THREE.Points;
   /** Base scale from config */
   baseScale: number;
   /** Current hover intensity (0..1, animated) */
@@ -44,7 +55,7 @@ export class ConstellationScene {
 
   /** Which orb is currently gazed at (index, or -1) */
   private gazedOrbIndex = -1;
-  /** Accumulated gaze time on current orb (not used for auto-select, just visual) */
+  /** Accumulated gaze time on current orb */
   private gazeTime = 0;
 
   /** Slow auto-rotation speed (rad/sec) */
@@ -80,9 +91,12 @@ export class ConstellationScene {
     this.constellationGroup = new THREE.Group();
     this.scene.add(this.constellationGroup);
 
+    // Load progress from localStorage
+    const progress = loadSeedProgress();
+
     this.addLighting();
     this.addDustField();
-    this.createOrbs(AWAKENING_SEEDS);
+    this.createOrbs(AWAKENING_SEEDS, progress);
     this.setupInput();
   }
 
@@ -128,32 +142,40 @@ export class ConstellationScene {
 
   // ─── Orb creation ──────────────────────────────────────────────────────────
 
-  private createOrbs(seeds: SeedConfig[]): void {
+  private createOrbs(seeds: SeedConfig[], allProgress: AllSeedProgress): void {
     for (const seed of seeds) {
+      const prog = allProgress[seed.id] ?? { discovered: 0, total: 0, playtime: 0, visits: 0, lastVisited: 0 };
+      const ratio = prog.total > 0 ? prog.discovered / prog.total : 0;
+
       const group = new THREE.Group();
       const [x, y, z] = seed.orb.position;
       group.position.set(x, y, z);
 
-      // Inner core — solid, bright
+      // ─── Inner core ─────────────────────────────────────────────────
+      // More solid and brighter as discovery increases
       const coreGeo = new THREE.SphereGeometry(0.18 * seed.orb.size, 32, 32);
+      const coreOpacity = 0.3 + ratio * 0.7; // 0.3 (unvisited) → 1.0 (fully discovered)
       const coreMat = new THREE.MeshStandardMaterial({
         color: seed.orb.color,
         emissive: seed.orb.color,
-        emissiveIntensity: seed.orb.luminosity * 0.8,
-        roughness: 0.2,
-        metalness: 0.1,
+        emissiveIntensity: seed.orb.luminosity * (0.4 + ratio * 0.6),
+        roughness: 0.5 - ratio * 0.3, // Gets shinier with discovery
+        metalness: ratio * 0.3,
+        transparent: ratio < 1,
+        opacity: coreOpacity,
       });
       const coreMesh = new THREE.Mesh(coreGeo, coreMat);
       group.add(coreMesh);
 
-      // Outer glow — transparent, larger
+      // ─── Outer glow ────────────────────────────────────────────────
+      // Fades as seed becomes more solid
       const glowGeo = new THREE.SphereGeometry(0.35 * seed.orb.size, 32, 32);
       const glowMat = new THREE.MeshStandardMaterial({
         color: seed.orb.color,
         emissive: seed.orb.color,
-        emissiveIntensity: seed.orb.luminosity * 0.3,
+        emissiveIntensity: seed.orb.luminosity * 0.3 * (1 - ratio * 0.5),
         transparent: true,
-        opacity: 0.15,
+        opacity: 0.15 * (1 - ratio * 0.6),
         roughness: 1,
         metalness: 0,
         side: THREE.FrontSide,
@@ -162,37 +184,55 @@ export class ConstellationScene {
       const glowMesh = new THREE.Mesh(glowGeo, glowMat);
       group.add(glowMesh);
 
-      // Point light — each orb illuminates its neighborhood
-      const light = new THREE.PointLight(seed.orb.color, seed.orb.luminosity * 0.6, 4);
+      // ─── Point light ───────────────────────────────────────────────
+      const lightIntensity = seed.orb.luminosity * (0.4 + ratio * 0.6);
+      const light = new THREE.PointLight(seed.orb.color, lightIntensity, 4);
       group.add(light);
 
-      // Orbiting particles
-      const particles = this.createOrbParticles(seed);
-      group.add(particles);
+      // ─── Fuzz cloud ────────────────────────────────────────────────
+      // Dense noise shell that dissipates with discovery
+      const fuzzCloud = this.createFuzzCloud(seed, ratio);
+      group.add(fuzzCloud);
+
+      // ─── Entity particles ──────────────────────────────────────────
+      // Each particle represents an undiscovered entity
+      const entityParticles = this.createEntityParticles(seed, prog);
+      group.add(entityParticles);
 
       this.constellationGroup.add(group);
 
       this.orbs.push({
         seed,
+        progress: prog,
+        discoveryRatio: ratio,
         glowMesh,
         coreMesh,
         group,
-        particles,
+        entityParticles,
+        fuzzCloud,
         baseScale: seed.orb.size,
         hoverIntensity: 0,
       });
     }
   }
 
-  private createOrbParticles(seed: SeedConfig): THREE.Points {
-    const count = 40;
-    const positions = new Float32Array(count * 3);
+  /**
+   * Fuzz cloud — a shell of noisy particles that represents quantum uncertainty.
+   * Fully unvisited: dense, chaotic. Fully discovered: gone entirely.
+   */
+  private createFuzzCloud(seed: SeedConfig, discoveryRatio: number): THREE.Points {
+    const fuzziness = 1 - discoveryRatio; // 1 = full fuzz, 0 = none
+    const count = Math.floor(200 * fuzziness);
+    const positions = new Float32Array(Math.max(count, 1) * 3);
+
+    const baseRadius = 0.35 * seed.orb.size;
 
     for (let i = 0; i < count; i++) {
-      // Distribute in a shell around the orb
+      // Random positions in a noisy shell around the orb
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-      const r = 0.4 * seed.orb.size + Math.random() * 0.3;
+      // Varying radii — some close, some far — gives a cloudy, uncertain look
+      const r = baseRadius * (0.5 + Math.random() * 1.0);
       positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
       positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
       positions[i * 3 + 2] = r * Math.cos(phi);
@@ -203,9 +243,46 @@ export class ConstellationScene {
 
     const mat = new THREE.PointsMaterial({
       color: seed.orb.color,
-      size: 0.03,
+      size: 0.025 + fuzziness * 0.02,
       transparent: true,
-      opacity: 0.6,
+      opacity: fuzziness * 0.5,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+
+    return new THREE.Points(geo, mat);
+  }
+
+  /**
+   * Entity particles — each dot represents an undiscovered entity.
+   * They orbit the seed at varying distances. As entities are discovered,
+   * fewer particles remain. Fully discovered = no orbiting particles.
+   */
+  private createEntityParticles(seed: SeedConfig, progress: SeedProgressData): THREE.Points {
+    const undiscovered = Math.max(0, (progress.total || 26) - progress.discovered);
+    const count = undiscovered;
+    const positions = new Float32Array(Math.max(count, 1) * 3);
+
+    for (let i = 0; i < count; i++) {
+      const theta = (i / Math.max(count, 1)) * Math.PI * 2 + Math.random() * 0.3;
+      const phi = Math.acos(2 * Math.random() - 1);
+      // Orbit at a distance proportional to the orb size
+      const r = 0.45 * seed.orb.size + Math.random() * 0.35;
+      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = r * Math.cos(phi);
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    // Brighter, more distinct particles than the fuzz
+    const mat = new THREE.PointsMaterial({
+      color: seed.orb.color,
+      size: 0.04,
+      transparent: true,
+      opacity: 0.7,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       sizeAttenuation: true,
@@ -239,7 +316,7 @@ export class ConstellationScene {
   private selectOrb(orb: OrbInstance): void {
     this.selectedOrb = orb;
     this.selectionProgress = 0;
-    console.log(`✦ Seed selected: ${orb.seed.id}`);
+    console.log(`✦ Seed selected: ${orb.seed.id} (${Math.round(orb.discoveryRatio * 100)}% discovered)`);
   }
 
   // ─── Update (call each frame) ──────────────────────────────────────────────
@@ -261,13 +338,13 @@ export class ConstellationScene {
     // Gaze detection — raycast from mouse position
     this.raycaster.setFromCamera(this.mouseNDC, this.camera);
 
-    // Collect all core meshes for intersection
-    const coreObjects = this.orbs.map((o) => o.glowMesh);
-    const intersects = this.raycaster.intersectObjects(coreObjects);
+    // Collect all glow meshes for intersection (larger target)
+    const hitTargets = this.orbs.map((o) => o.glowMesh);
+    const intersects = this.raycaster.intersectObjects(hitTargets);
 
     const prevGazed = this.gazedOrbIndex;
     if (intersects.length > 0) {
-      this.gazedOrbIndex = coreObjects.indexOf(intersects[0].object as THREE.Mesh);
+      this.gazedOrbIndex = hitTargets.indexOf(intersects[0].object as THREE.Mesh);
       if (this.gazedOrbIndex === prevGazed) {
         this.gazeTime += dt;
       } else {
@@ -283,6 +360,8 @@ export class ConstellationScene {
       const orb = this.orbs[i];
       const isGazed = i === this.gazedOrbIndex;
       const isSelected = orb === this.selectedOrb;
+      const ratio = orb.discoveryRatio;
+      const fuzziness = 1 - ratio;
 
       // Hover intensity (smooth lerp)
       const targetHover = isGazed ? 1 : 0;
@@ -290,33 +369,60 @@ export class ConstellationScene {
 
       // Pulse: scale oscillation based on configured pulseRate
       const pulse = Math.sin(this.elapsed * orb.seed.orb.pulseRate * Math.PI * 2);
-      const pulseScale = 1 + pulse * 0.08;
+      // Undiscovered seeds pulse more wildly; discovered seeds are calm
+      const pulseAmplitude = 0.03 + fuzziness * 0.08;
+      const pulseScale = 1 + pulse * pulseAmplitude;
 
       // Hover expand
       const hoverScale = 1 + orb.hoverIntensity * 0.25;
 
       const totalScale = orb.baseScale * pulseScale * hoverScale;
       orb.coreMesh.scale.setScalar(totalScale);
-      orb.glowMesh.scale.setScalar(totalScale * 1.0);
+      orb.glowMesh.scale.setScalar(totalScale);
 
-      // Emissive intensity — brighter on hover and pulse peak
+      // Core emissive intensity — brighter on hover, brighter when discovered
       const coreMat = orb.coreMesh.material as THREE.MeshStandardMaterial;
-      const baseEmissive = orb.seed.orb.luminosity * 0.8;
+      const baseEmissive = orb.seed.orb.luminosity * (0.4 + ratio * 0.6);
       const hoverEmissive = orb.hoverIntensity * 0.6;
-      const pulseEmissive = (pulse * 0.5 + 0.5) * 0.2;
+      const pulseEmissive = (pulse * 0.5 + 0.5) * 0.2 * (0.5 + ratio * 0.5);
       coreMat.emissiveIntensity = baseEmissive + hoverEmissive + pulseEmissive;
+      coreMat.opacity = (0.3 + ratio * 0.7) + orb.hoverIntensity * 0.2;
 
-      // Glow opacity — more visible on hover
+      // Glow opacity — more visible on hover, less visible when discovered
       const glowMat = orb.glowMesh.material as THREE.MeshStandardMaterial;
-      glowMat.opacity = 0.12 + orb.hoverIntensity * 0.2 + pulseEmissive * 0.1;
+      glowMat.opacity = (0.15 * (1 - ratio * 0.6)) + orb.hoverIntensity * 0.2;
 
-      // Particle rotation (orbit around the orb)
-      orb.particles.rotation.y += (0.3 + orb.hoverIntensity * 0.5) * dt;
-      orb.particles.rotation.x += 0.1 * dt;
+      // ─── Fuzz cloud animation ──────────────────────────────────────
+      // Jitter the fuzz particles for a quantum-uncertain look
+      const fuzzPositions = orb.fuzzCloud.geometry.attributes.position;
+      if (fuzzPositions && fuzzPositions.count > 1) {
+        for (let p = 0; p < fuzzPositions.count; p++) {
+          const ox = fuzzPositions.getX(p);
+          const oy = fuzzPositions.getY(p);
+          const oz = fuzzPositions.getZ(p);
+          // Subtle jitter — more chaotic when less discovered
+          const jitter = fuzziness * 0.003;
+          fuzzPositions.setXYZ(
+            p,
+            ox + (Math.random() - 0.5) * jitter,
+            oy + (Math.random() - 0.5) * jitter,
+            oz + (Math.random() - 0.5) * jitter
+          );
+        }
+        fuzzPositions.needsUpdate = true;
+      }
+
+      // Fuzz opacity pulses
+      const fuzzMat = orb.fuzzCloud.material as THREE.PointsMaterial;
+      fuzzMat.opacity = fuzziness * (0.35 + pulse * 0.15) + orb.hoverIntensity * fuzziness * 0.2;
+
+      // ─── Entity particles orbit ────────────────────────────────────
+      orb.entityParticles.rotation.y += (0.3 + orb.hoverIntensity * 0.5) * dt;
+      orb.entityParticles.rotation.x += 0.1 * dt;
 
       // Particle brightness on hover
-      const particleMat = orb.particles.material as THREE.PointsMaterial;
-      particleMat.opacity = 0.4 + orb.hoverIntensity * 0.5;
+      const particleMat = orb.entityParticles.material as THREE.PointsMaterial;
+      particleMat.opacity = 0.5 + orb.hoverIntensity * 0.4;
 
       // Selection flash animation
       if (isSelected && this.selectionProgress >= 0) {
@@ -337,10 +443,16 @@ export class ConstellationScene {
       // Flare the selected orb
       const coreMat = orb.coreMesh.material as THREE.MeshStandardMaterial;
       coreMat.emissiveIntensity = orb.seed.orb.luminosity + t * 3;
+      coreMat.opacity = 1;
       const glowMat = orb.glowMesh.material as THREE.MeshStandardMaterial;
       glowMat.opacity = 0.3 + t * 0.5;
       orb.coreMesh.scale.setScalar(orb.baseScale * (1 + t * 0.5));
       orb.glowMesh.scale.setScalar(orb.baseScale * (1 + t * 0.8));
+
+      // Fuzz collapses inward during selection
+      const fuzzMat = orb.fuzzCloud.material as THREE.PointsMaterial;
+      fuzzMat.opacity = Math.max(0, fuzzMat.opacity - dt * 2);
+      orb.fuzzCloud.scale.setScalar(1 - t * 0.5);
 
       // Fade non-selected orbs
       for (const other of this.orbs) {
@@ -348,9 +460,12 @@ export class ConstellationScene {
         const cm = other.coreMesh.material as THREE.MeshStandardMaterial;
         const gm = other.glowMesh.material as THREE.MeshStandardMaterial;
         cm.emissiveIntensity = Math.max(0, cm.emissiveIntensity - dt * 2);
+        cm.opacity = Math.max(0, cm.opacity - dt * 1.5);
         gm.opacity = Math.max(0, gm.opacity - dt * 1.5);
-        const pm = other.particles.material as THREE.PointsMaterial;
+        const pm = other.entityParticles.material as THREE.PointsMaterial;
         pm.opacity = Math.max(0, pm.opacity - dt * 2);
+        const fm = other.fuzzCloud.material as THREE.PointsMaterial;
+        fm.opacity = Math.max(0, fm.opacity - dt * 2);
       }
     }
 
@@ -404,8 +519,10 @@ export class ConstellationScene {
       (orb.coreMesh.material as THREE.Material).dispose();
       orb.glowMesh.geometry.dispose();
       (orb.glowMesh.material as THREE.Material).dispose();
-      orb.particles.geometry.dispose();
-      (orb.particles.material as THREE.Material).dispose();
+      orb.entityParticles.geometry.dispose();
+      (orb.entityParticles.material as THREE.Material).dispose();
+      orb.fuzzCloud.geometry.dispose();
+      (orb.fuzzCloud.material as THREE.Material).dispose();
     }
 
     if (this.dustField) {

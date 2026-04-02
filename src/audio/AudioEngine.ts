@@ -72,7 +72,7 @@ export class AudioEngine {
   private listenerUp = { x: 0, y: 1, z: 0 };
 
   /** Master volume (0-1) */
-  private _volume = 0.5;
+  private _volume = 0.35;
 
   /** Sample cache */
   private sampleCache: Map<string, AudioBuffer> = new Map();
@@ -165,6 +165,8 @@ export class AudioEngine {
    */
   playTone(options: ToneOptions): void {
     if (!this.ctx || !this.compressor) return;
+    // Guard against NaN/Infinity from bad math upstream
+    if (!isFinite(options.frequency) || !isFinite(options.duration) || !isFinite(options.gain ?? 0)) return;
 
     const {
       frequency, duration,
@@ -186,9 +188,10 @@ export class AudioEngine {
 
     // Gain envelope
     const gainNode = this.ctx.createGain();
+    const sustainEnd = Math.max(attack + 0.001, duration - release);
     gainNode.gain.setValueAtTime(0, now);
     gainNode.gain.linearRampToValueAtTime(gain, now + attack);
-    gainNode.gain.setValueAtTime(gain, now + duration - release);
+    gainNode.gain.setValueAtTime(gain, now + sustainEnd);
     gainNode.gain.linearRampToValueAtTime(0, now + duration);
 
     // Routing
@@ -222,47 +225,61 @@ export class AudioEngine {
     // Base frequency rises with observation level
     const baseFreq = 300 + observationLevel * 200;
 
-    // Three-note rising arpeggio
-    const notes = [1, 1.25, 1.5]; // root, major third, fifth
-    const noteDelay = 0.08;
+    // Two-note rising interval — gentle, not busy
+    const notes = [1, 1.5]; // root, fifth
+    const noteDelay = 0.1;
 
     for (let i = 0; i < notes.length; i++) {
       setTimeout(() => {
         this.playTone({
           frequency: baseFreq * notes[i],
           type: 'sine',
-          duration: 0.6 - i * 0.1,
-          gain: 0.15 - i * 0.02,
-          attack: 0.02,
+          duration: 0.5,
+          gain: 0.08 - i * 0.02,
+          attack: 0.05,
           release: 0.3,
           spatial,
         });
       }, i * noteDelay * 1000);
     }
-
-    // Soft harmonic shimmer on top
-    this.playTone({
-      frequency: baseFreq * 2,
-      type: 'triangle',
-      duration: 0.8,
-      gain: 0.06,
-      attack: 0.1,
-      release: 0.5,
-      spatial,
-    });
   }
 
   /**
-   * Play a soft gaze-start sound — a gentle tonal "ping".
+   * Play a milestone chord — a slightly richer sound for every 5th discovery.
+   * Gentle, not bombastic.
+   */
+  playMilestoneChord(progressRatio: number, spatial?: SpatialOptions): void {
+    if (!this.ctx) return;
+
+    const baseFreq = 220 + progressRatio * 160;
+
+    // Soft triad — root, third, fifth played together
+    const intervals = [1, 1.25, 1.5];
+
+    for (let i = 0; i < intervals.length; i++) {
+      this.playTone({
+        frequency: baseFreq * intervals[i],
+        type: 'sine',
+        duration: 1.0,
+        gain: 0.06,
+        attack: 0.1,
+        release: 0.6,
+        spatial,
+      });
+    }
+  }
+
+  /**
+   * Play a soft gaze-start sound — a barely-there tonal "ping".
    */
   playGazeStart(spatial?: SpatialOptions): void {
     this.playTone({
       frequency: 440,
       type: 'sine',
-      duration: 0.15,
-      gain: 0.06,
+      duration: 0.12,
+      gain: 0.03,
       attack: 0.01,
-      release: 0.12,
+      release: 0.1,
       spatial,
     });
   }
@@ -295,11 +312,11 @@ export class AudioEngine {
     const gainNode = this.ctx.createGain();
     gainNode.gain.value = initialGain;
 
-    // Low-pass filter to keep it soft
+    // Low-pass filter to keep it soft but audible
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 800;
-    filter.Q.value = 0.5;
+    filter.frequency.value = 1200;
+    filter.Q.value = 0.7;
 
     let panner: PannerNode | null = null;
 

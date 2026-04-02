@@ -145,7 +145,7 @@ const gameLoop = new GameLoop({
 
       case 'world':
         worldScene?.render(renderer);
-        hud.textContent = `FPS: ${gameLoop.fps} | Entities: ${worldScene?.entityCount ?? 0}`;
+        hud.textContent = `FPS: ${gameLoop.fps} | Discovered: ${worldScene?.discovered ?? 0}/${worldScene?.totalEntities ?? 0}`;
         break;
     }
   },
@@ -172,6 +172,33 @@ window.addEventListener('resize', () => {
 renderer.domElement.addEventListener('click', () => {
   if (phase === 'world' && document.pointerLockElement !== renderer.domElement) {
     renderer.domElement.requestPointerLock();
+  }
+});
+
+// ─── Backtick (`): return to constellation from world ────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Backquote' && phase === 'world') {
+    e.preventDefault();
+    // Exit pointer lock
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+    // Clean up world
+    worldScene?.dispose();
+    worldScene = null;
+    // Hide world UI
+    hud.style.display = 'none';
+    crosshair.style.display = 'none';
+    // Fade to black then enter constellation
+    transitionAlpha = 1;
+    fadeOverlay.style.opacity = '1';
+    fadeOverlay.style.pointerEvents = 'all';
+
+    setTimeout(() => {
+      enterConstellation();
+      transitionTarget = 0;
+    }, 400);
   }
 });
 

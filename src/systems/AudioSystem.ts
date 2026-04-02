@@ -3,6 +3,7 @@
  *
  * Listens to perception events on the event bus and plays spatial audio:
  *   - Discovery chime when an entity crosses its reveal threshold
+ *   - Milestone chord when every 5th entity is discovered
  *   - Soft ping when gaze lands on a new entity
  *   - Ambient drone that deepens as more of the world is observed
  *
@@ -56,8 +57,22 @@ export class AudioSystem implements System {
         ? { x: transform.x, y: transform.y, z: transform.z }
         : undefined;
 
-      this.engine.playDiscoveryChime(e.observationLevel, spatial);
       this.discoveredCount++;
+
+      // Recount if we didn't get a valid count at init (entities may spawn after systems)
+      if (this.totalObservable === 0) {
+        this.totalObservable = world.query('observable').length;
+      }
+
+      const progress = this.totalObservable > 0 ? this.discoveredCount / this.totalObservable : 0;
+
+      // Milestone discovery (every 5th) gets a bigger sound
+      if (this.discoveredCount % 5 === 0) {
+        this.engine.playMilestoneChord(progress, spatial);
+      } else {
+        this.engine.playDiscoveryChime(e.observationLevel, spatial);
+      }
+
       this.updateAmbientIntensity();
     });
 
@@ -98,32 +113,90 @@ export class AudioSystem implements System {
 
   // ─── Ambient Soundscape ────────────────────────────────────────────────
 
-  private startAmbient(): void {
-    // Base drone — very low, felt more than heard
-    this.baseDrone = this.engine.createAmbientLayer(55, 'sine', 0);
+  /**
+   * Sacred / Solfeggio frequency progression.
+   *
+   * The ambient drone ascends through frequencies with esoteric significance
+   * as the player discovers more of the world:
+   *
+   *   0%   — 136.1 Hz  "Om" — the primordial vibration, root of being
+   *   10%  — 174 Hz    Foundation — grounding, security
+   *   20%  — 285 Hz    Quantum cognition — cellular healing
+   *   30%  — 396 Hz    Liberation — releasing fear and guilt
+   *   40%  — 417 Hz    Change — facilitating transformation
+   *   50%  — 528 Hz    Love frequency — DNA repair, miracles
+   *   60%  — 639 Hz    Connection — harmonizing relationships
+   *   70%  — 741 Hz    Intuition — awakening inner knowing
+   *   80%  — 852 Hz    Spiritual order — returning to source
+   *   90%+ — 963 Hz    Third eye — pineal gland activation, cosmic unity
+   *
+   * The base drone stays at a sub-octave of the current solfeggio tone.
+   * The harmonic layer carries the solfeggio frequency itself.
+   */
+  private static readonly SOLFEGGIO_STEPS: [number, number][] = [
+    [0.00, 136.1],  // Om
+    [0.10, 174],    // Foundation
+    [0.20, 285],    // Quantum cognition
+    [0.30, 396],    // Liberation
+    [0.40, 417],    // Change
+    [0.50, 528],    // Love / transformation
+    [0.60, 639],    // Connection
+    [0.70, 741],    // Intuition
+    [0.80, 852],    // Spiritual order
+    [0.90, 963],    // Third eye / pineal
+  ];
 
-    // Harmonic layer — warmer, rises with discovery
-    this.harmDrone = this.engine.createAmbientLayer(110, 'triangle', 0);
+  private startAmbient(): void {
+    // Base drone — sub-octave of the current solfeggio tone, very quiet
+    this.baseDrone = this.engine.createAmbientLayer(68, 'sine', 0.02);
+
+    // Harmonic layer — carries the solfeggio frequency
+    this.harmDrone = this.engine.createAmbientLayer(136.1, 'triangle', 0);
   }
 
   /**
-   * Ambient intensity scales with how much of the world has been discovered.
-   * An empty world is silent. A fully observed world hums with presence.
+   * Lerp through the solfeggio scale based on discovery ratio.
+   */
+  private getSolfeggioFrequency(ratio: number): number {
+    const steps = AudioSystem.SOLFEGGIO_STEPS;
+    if (ratio <= 0) return steps[0][1];
+    if (ratio >= steps[steps.length - 1][0]) return steps[steps.length - 1][1];
+
+    // Find surrounding steps and interpolate
+    for (let i = 0; i < steps.length - 1; i++) {
+      const [t0, f0] = steps[i];
+      const [t1, f1] = steps[i + 1];
+      if (ratio >= t0 && ratio < t1) {
+        const t = (ratio - t0) / (t1 - t0);
+        // Smooth interpolation between sacred tones
+        const smooth = t * t * (3 - 2 * t); // smoothstep
+        return f0 + (f1 - f0) * smooth;
+      }
+    }
+    return steps[steps.length - 1][1];
+  }
+
+  /**
+   * Ambient intensity and frequency scale with discovery.
+   * An empty world hums at Om. A fully observed world resonates at 963 Hz.
    */
   private updateAmbientIntensity(): void {
-    if (!this.baseDrone || !this.harmDrone || this.totalObservable === 0) return;
+    if (!this.baseDrone || !this.harmDrone) return;
 
-    const ratio = this.discoveredCount / this.totalObservable;
+    const ratio = this.totalObservable > 0
+      ? this.discoveredCount / this.totalObservable
+      : 0;
 
-    // Base drone fades in gently
-    this.baseDrone.setGain(ratio * 0.08);
-    // Shift pitch up slightly as world fills
-    this.baseDrone.setFrequency(55 + ratio * 15);
+    const solfeggioFreq = this.getSolfeggioFrequency(ratio);
 
-    // Harmonic layer comes in later, grows faster
-    const harmRatio = Math.max(0, (ratio - 0.2) / 0.8); // starts at 20% discovery
-    this.harmDrone.setGain(harmRatio * 0.05);
-    this.harmDrone.setFrequency(110 + harmRatio * 30);
+    // Base drone: sub-octave of solfeggio, grows gently
+    this.baseDrone.setGain(0.02 + ratio * 0.08);
+    this.baseDrone.setFrequency(solfeggioFreq * 0.5); // One octave below
+
+    // Harmonic layer: the solfeggio frequency itself, rises subtly with discovery
+    const harmRatio = Math.max(0, (ratio - 0.1) / 0.9);
+    this.harmDrone.setGain(harmRatio * 0.06);
+    this.harmDrone.setFrequency(solfeggioFreq);
   }
 
   // ─── Cleanup ───────────────────────────────────────────────────────────

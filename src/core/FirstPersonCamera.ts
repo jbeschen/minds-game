@@ -108,4 +108,24 @@ export class FirstPersonCamera {
   getWorldPosition(): THREE.Vector3 {
     return this.camera.getWorldPosition(new THREE.Vector3());
   }
+
+  // ─── Save / Load state ──────────────────────────────────────────────────
+
+  getState(): { x: number; y: number; z: number; yaw: number; pitch: number } {
+    return {
+      x: this.body.position.x,
+      y: this.body.position.y,
+      z: this.body.position.z,
+      yaw: this.yaw,
+      pitch: this.pitch,
+    };
+  }
+
+  setState(state: { x: number; y: number; z: number; yaw: number; pitch: number }): void {
+    this.body.position.set(state.x, state.y, state.z);
+    this.yaw = state.yaw;
+    this.pitch = state.pitch;
+    this.body.rotation.y = this.yaw;
+    this.camera.rotation.x = this.pitch;
+  }
 }

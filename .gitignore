@@ -3,4 +3,5 @@ dist/
 .vite/
 *.local
 .DS_Store
+Archive_Plans/
 
