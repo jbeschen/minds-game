@@ -463,11 +463,12 @@ Server-authoritative world state with client-side perception filtering. WebSocke
 - [ ] Create resonance/dissonance effects (visual, audio, behavioral)
 - [ ] Implement mastery tracking with sigmoid curves and breakthrough events
 - [ ] Design cross-domain synergy matrix for base story
-- [ ] Build "Mary's Room", "The Bat's Echo", "The Frequency", "Phi" discovery moments
+- [ ] Build debug overlay for emotion/mastery system values
 - [ ] Integrate all three systems — perception, emotion, mastery feeding each other
 - **Deliverable:** The world responds to how you feel and what you practice. Breakthroughs transform the environment.
 
 ### Phase 3: Primal Seeds & Narrative (Weeks 15–22)
+- [ ] Build "Mary's Room", "The Bat's Echo", "The Frequency", "Phi" discovery moments
 - [ ] Build 5 Primal Seed environments — each seed has a distinct **setting** that progressively reveals as the player discovers entities (e.g., Void → starlit ocean with full moon; Ember → volcanic caldera under aurora; Tide → deep forest by a still lake; Lattice → crystalline canyon at dawn; Breath → mountaintop above clouds). Starts in darkness; scenery elements lock in permanently as awareness grows; ambient light reaches full daylight at seed completion. Draw on occult/philosophical correspondences for seed↔setting pairings.
 - [ ] Design per-seed **generative soundscapes** — each seed has a unique ambient melody/drone built on its solfeggio frequency signature. The soundtrack evolves as entities are discovered, progressing through the solfeggio scale (136.1 Hz Om → 963 Hz third eye). Consider procedural music generation or curated sample layers rather than raw oscillator tones.
 - [ ] Build 5 Primal Seed worlds (Ember, Tide, Void, Lattice, Breath) as focused 30–60 min experiences

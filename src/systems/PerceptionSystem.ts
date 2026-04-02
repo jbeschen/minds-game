@@ -49,9 +49,32 @@ export class PerceptionSystem implements System {
   /** Elapsed time for drift noise */
   private elapsed = 0;
 
+  /** Per-entity resonance from emotion system — boosts observation gain */
+  private entityResonance: Map<number, number> = new Map();
+
+  /** Mastery-based observation bonus (from observation domain mastery) */
+  private observationMasteryBonus = 0;
+
   constructor(playerCamera: FirstPersonCamera, scene: THREE.Scene) {
     this.playerCamera = playerCamera;
     this.scene = scene;
+  }
+
+  init(world: World): void {
+    // Listen to emotion resonance for observation boost
+    world.events.on('emotion:state_updated', (e) => {
+      if (e.entityResonance) {
+        this.entityResonance.clear();
+        for (const [idStr, res] of Object.entries(e.entityResonance)) {
+          this.entityResonance.set(Number(idStr), res as number);
+        }
+      }
+    });
+
+    // Listen to mastery levels for observation domain bonus
+    world.events.on('mastery:state_updated', (e) => {
+      this.observationMasteryBonus = e.levels?.observation ?? 0;
+    });
   }
 
   update(world: World, dt: number, entities: EntityId[]): void {
@@ -108,7 +131,14 @@ export class PerceptionSystem implements System {
         const momentumT = Math.min(observable.gazeStreak / this.momentumRampTime, 1.0);
         const momentumFactor = 1.0 + (this.momentumMaxMultiplier - 1.0) * momentumT;
 
-        const gain = observable.gainRate * distanceFactor * zoneFactor * momentumFactor * dt;
+        // Emotion resonance bonus: resonant entities are easier to observe
+        const resonance = this.entityResonance.get(id) ?? 0;
+        const resonanceFactor = 1.0 + Math.max(0, resonance) * 0.5; // up to +50%
+
+        // Mastery bonus: observation domain mastery accelerates all observation
+        const masteryFactor = 1.0 + this.observationMasteryBonus * 0.3; // up to +30%
+
+        const gain = observable.gainRate * distanceFactor * zoneFactor * momentumFactor * resonanceFactor * masteryFactor * dt;
         const prevLevel = observable.observationLevel;
         observable.observationLevel = Math.min(1, observable.observationLevel + gain);
         observable.totalObserveTime += dt;

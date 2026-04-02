@@ -19,6 +19,16 @@ import {
   updateObservationMaterial,
 } from '../shaders/ObservationMaterial';
 
+/** Emotion dimension → tint color mapping */
+const EMOTION_TINTS: THREE.Color[] = [
+  new THREE.Color(0.9, 0.5, 0.3),  // warmth — warm orange
+  new THREE.Color(0.7, 0.3, 0.3),  // tension — muted red
+  new THREE.Color(0.3, 0.7, 0.9),  // curiosity — bright cyan
+  new THREE.Color(0.6, 0.4, 0.9),  // awe — soft violet
+  new THREE.Color(0.4, 0.4, 0.7),  // melancholy — steel blue
+  new THREE.Color(0.9, 0.8, 0.3),  // energy — bright gold
+];
+
 export class RenderSystem implements System {
   name = 'render';
   requiredComponents = ['transform', 'renderable'];
@@ -34,6 +44,15 @@ export class RenderSystem implements System {
 
   /** Scene fog density */
   private fogDensity: number;
+
+  /** Current emotion tint (updated via events) */
+  private emotionTint: THREE.Color = new THREE.Color(0.5, 0.5, 0.5);
+
+  /** Per-entity resonance values (entityId → resonance) */
+  private entityResonance: Map<EntityId, number> = new Map();
+
+  /** Mastery levels by domain (domain → level 0..1) */
+  private masteryLevels: Record<string, number> = {};
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -58,6 +77,26 @@ export class RenderSystem implements System {
         (mesh.material as THREE.Material).dispose();
         this.meshes.delete(event.entityId);
       }
+    });
+
+    // Listen to emotion state for tint and resonance
+    world.events.on('emotion:state_updated', (e) => {
+      const dominant = e.dominantEmotion ?? 2;
+      if (dominant >= 0 && dominant < EMOTION_TINTS.length) {
+        this.emotionTint.copy(EMOTION_TINTS[dominant]);
+      }
+      // Update per-entity resonance map
+      if (e.entityResonance) {
+        this.entityResonance.clear();
+        for (const [idStr, res] of Object.entries(e.entityResonance)) {
+          this.entityResonance.set(Number(idStr), res as number);
+        }
+      }
+    });
+
+    // Listen to mastery levels
+    world.events.on('mastery:state_updated', (e) => {
+      this.masteryLevels = e.levels ?? {};
     });
   }
 
@@ -95,12 +134,25 @@ export class RenderSystem implements System {
           gazeIntensity = zoneFactor * (0.5 + 0.5 * momentumFactor);
         }
 
+        // Get emotional resonance for this entity
+        const emotionalField = world.getComponent(id, 'emotionalField');
+        const resonance = emotionalField ? (this.entityResonance.get(id) ?? 0) : 0;
+
+        // Get mastery glow: how much mastery the player has in this entity's domain
+        const affordance = world.getComponent(id, 'masteryAffordance');
+        const masteryGlow = affordance
+          ? (this.masteryLevels[affordance.domain] ?? 0)
+          : 0;
+
         // Drive the shader — this is the only interface
         updateObservationMaterial(
           mesh.material as THREE.ShaderMaterial,
           observable.observationLevel,
           this.elapsed,
-          gazeIntensity
+          gazeIntensity,
+          resonance,
+          masteryGlow,
+          this.emotionTint
         );
 
         // Scale subtly with observation (things become "more real")

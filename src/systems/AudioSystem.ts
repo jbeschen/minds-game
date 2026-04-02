@@ -29,6 +29,9 @@ export class AudioSystem implements System {
   private baseDrone: AmbientLayerHandle | null = null;
   private harmDrone: AmbientLayerHandle | null = null;
 
+  /** Emotion resonance drone — shifts with emotional state */
+  private emotionDrone: AmbientLayerHandle | null = null;
+
   /** Count of discovered entities — drives ambient intensity */
   private discoveredCount = 0;
   /** Total entities in the world (set on init) */
@@ -36,6 +39,10 @@ export class AudioSystem implements System {
 
   /** Cooldown to avoid rapid-fire gaze pings */
   private gazeStartCooldown = 0;
+
+  /** Current player emotion state */
+  private dominantEmotion = 2;
+  private peakResonance = 0;
 
   constructor(camera: FirstPersonCamera) {
     this.camera = camera;
@@ -87,6 +94,23 @@ export class AudioSystem implements System {
         : undefined;
 
       this.engine.playGazeStart(spatial);
+    });
+
+    // ─── Emotion state changes ────────────────────────────────────────
+    world.events.on('emotion:state_updated', (e) => {
+      this.dominantEmotion = e.dominantEmotion ?? 2;
+      this.peakResonance = e.peakResonance ?? 0;
+      this.updateEmotionDrone();
+    });
+
+    // ─── Mastery breakthroughs ──────────────────────────────────────
+    world.events.on('mastery:breakthrough', (e) => {
+      this.playBreakthroughSound(e.tier ?? 0);
+    });
+
+    // ─── Synergy activations ────────────────────────────────────────
+    world.events.on('mastery:synergy_activated', () => {
+      this.playSynergyChime();
     });
 
     // ─── Start ambient drones ────────────────────────────────────────────
@@ -152,6 +176,10 @@ export class AudioSystem implements System {
 
     // Harmonic layer — carries the solfeggio frequency
     this.harmDrone = this.engine.createAmbientLayer(136.1, 'triangle', 0);
+
+    // Emotion drone — a very subtle layer that shifts with emotional state
+    // Starts silent, gains presence as emotional engagement deepens
+    this.emotionDrone = this.engine.createAmbientLayer(220, 'sine', 0);
   }
 
   /**
@@ -199,11 +227,80 @@ export class AudioSystem implements System {
     this.harmDrone.setFrequency(solfeggioFreq);
   }
 
+  // ─── Emotion Audio ─────────────────────────────────────────────────────
+
+  /**
+   * Emotion drone frequencies — each dominant emotion shifts the drone.
+   *   warmth     → 220 Hz (A3, warm and grounded)
+   *   tension    → 233 Hz (Bb3, slightly dissonant)
+   *   curiosity  → 262 Hz (C4, open and neutral)
+   *   awe        → 330 Hz (E4, bright and lifted)
+   *   melancholy → 196 Hz (G3, deep and reflective)
+   *   energy     → 294 Hz (D4, driven and forward)
+   */
+  private static readonly EMOTION_FREQUENCIES = [220, 233, 262, 330, 196, 294];
+
+  private updateEmotionDrone(): void {
+    if (!this.emotionDrone) return;
+
+    const freq = AudioSystem.EMOTION_FREQUENCIES[this.dominantEmotion] ?? 262;
+    this.emotionDrone.setFrequency(freq);
+
+    // Gain scales with absolute resonance
+    const absResonance = Math.abs(this.peakResonance);
+    this.emotionDrone.setGain(absResonance * 0.04);
+  }
+
+  // ─── Mastery Audio ────────────────────────────────────────────────────
+
+  private playBreakthroughSound(tier: number): void {
+    const baseFreq = 264;
+
+    if (tier === 0) {
+      this.engine.playTone({ frequency: baseFreq, duration: 0.8, gain: 0.08, attack: 0.05, release: 0.5 });
+      setTimeout(() => {
+        this.engine.playTone({ frequency: baseFreq * 1.5, duration: 1.0, gain: 0.07, attack: 0.1, release: 0.6 });
+      }, 200);
+    } else if (tier === 1) {
+      const intervals = [1, 1.25, 1.5];
+      for (let i = 0; i < intervals.length; i++) {
+        setTimeout(() => {
+          this.engine.playTone({
+            frequency: baseFreq * intervals[i], duration: 1.2,
+            gain: 0.07, attack: 0.1, release: 0.7,
+          });
+        }, i * 250);
+      }
+    } else {
+      const harmonics = [1, 1.25, 1.5, 2, 2.5, 3];
+      for (let i = 0; i < harmonics.length; i++) {
+        setTimeout(() => {
+          this.engine.playTone({
+            frequency: baseFreq * harmonics[i],
+            type: i < 3 ? 'sine' : 'triangle',
+            duration: 2.0, gain: 0.05 / (1 + i * 0.3),
+            attack: 0.15, release: 1.2,
+          });
+        }, i * 150);
+      }
+    }
+  }
+
+  private playSynergyChime(): void {
+    this.engine.playTone({ frequency: 396, duration: 1.5, gain: 0.06, attack: 0.1, release: 0.8, detune: 15 });
+    this.engine.playTone({ frequency: 528, duration: 1.5, gain: 0.06, attack: 0.1, release: 0.8, detune: -10 });
+    setTimeout(() => {
+      this.engine.playTone({ frequency: 396, duration: 1.0, gain: 0.05, attack: 0.05, release: 0.6 });
+      this.engine.playTone({ frequency: 528, duration: 1.0, gain: 0.05, attack: 0.05, release: 0.6 });
+    }, 400);
+  }
+
   // ─── Cleanup ───────────────────────────────────────────────────────────
 
   destroy(): void {
     this.baseDrone?.stop();
     this.harmDrone?.stop();
+    this.emotionDrone?.stop();
     this.engine.dispose();
   }
 }

@@ -27,12 +27,17 @@ import { EventBus, World, FirstPersonCamera } from '../core';
 import { RenderSystem } from '../systems/RenderSystem';
 import { PerceptionSystem } from '../systems/PerceptionSystem';
 import { AudioSystem } from '../systems/AudioSystem';
+import { EmotionSystem } from '../systems/EmotionSystem';
+import { MasterySystem } from '../systems/MasterySystem';
+import { DebugOverlay } from '../systems/DebugOverlay';
 import { SeedConfig } from '../systems/SeedSystem';
 import {
   MeshType,
   createTransform,
   createObservable,
   createRenderable,
+  createEmotionalField,
+  createMasteryAffordance,
 } from '../components';
 import { updateSeedProgress, getSeedProgress } from '../systems/SeedProgress';
 
@@ -50,6 +55,12 @@ interface EntityDef {
   tags: string[];
   /** If set, this entity only spawns after ALL named entities are discovered */
   requiresDiscovery?: string[];
+  /** Emotional field: [warmth, tension, curiosity, awe, melancholy, energy] */
+  emotion?: number[];
+  /** Emotional field radius (default 5) */
+  emotionRadius?: number;
+  /** Emotional field intensity (default 0.3) */
+  emotionIntensity?: number;
 }
 
 // ─── Awakening World Entities ────────────────────────────────────────────────
@@ -64,17 +75,20 @@ const AWAKENING_ENTITIES: EntityDef[] = [
   // Welcoming sphere — the first thing most players will discover
   { name: 'welcome-light', x: 0.5, y: 0.8, z: -3, color: 0xecf0f1,
     meshType: 'sphere', decayRate: 0.06, gainRate: 0.3, revealThreshold: 0.25,
-    tags: ['surface', 'light'] },
+    tags: ['surface', 'light'],
+    emotion: [0.5, 0.0, 0.4, 0.2, 0.0, 0.3], emotionRadius: 4 },
 
   // Grounding cube — solid, structural, close
   { name: 'ground-block', x: -1.2, y: 0.5, z: -3.5, color: 0xbdc3c7,
     meshType: 'cube', decayRate: 0.06, gainRate: 0.25, revealThreshold: 0.3,
-    tags: ['surface', 'structure', 'sound'] },
+    tags: ['surface', 'structure', 'sound'],
+    emotion: [0.2, 0.1, 0.3, 0.0, 0.0, 0.2], emotionRadius: 3 },
 
   // Small curious orb — off to the side, rewards peripheral vision
   { name: 'curious-mote', x: 2.5, y: 0.4, z: -2.5, color: 0xe8d5b7,
     meshType: 'icosahedron', geometryScale: 0.6, decayRate: 0.08, gainRate: 0.35, revealThreshold: 0.2,
-    tags: ['surface', 'warm', 'light'] },
+    tags: ['surface', 'warm', 'light'],
+    emotion: [0.6, 0.0, 0.5, 0.1, 0.0, 0.4], emotionRadius: 3 },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MID RING — ORGANIC cluster (5-9m, left side)
@@ -83,19 +97,23 @@ const AWAKENING_ENTITIES: EntityDef[] = [
 
   { name: 'ember-heart', x: 3, y: 1.0, z: -6, color: 0xff6b35,
     meshType: 'sphere', geometryScale: 1.2, decayRate: 0.05, gainRate: 0.15, revealThreshold: 0.45,
-    tags: ['warm', 'energy', 'light'] },
+    tags: ['warm', 'energy', 'light'],
+    emotion: [0.8, 0.2, 0.3, 0.1, 0.0, 0.9], emotionRadius: 6 },
 
   { name: 'flame-ring', x: 4.5, y: 0.7, z: -7, color: 0xff8c42,
     meshType: 'torus', decayRate: 0.05, gainRate: 0.14, revealThreshold: 0.5,
-    tags: ['warm', 'flow', 'energy'] },
+    tags: ['warm', 'flow', 'energy'],
+    emotion: [0.7, 0.3, 0.2, 0.1, 0.0, 0.8], emotionRadius: 5 },
 
   { name: 'warmth-bloom', x: 2, y: 1.8, z: -7.5, color: 0xffad69,
     meshType: 'sphere', geometryScale: 0.8, decayRate: 0.04, gainRate: 0.18, revealThreshold: 0.4,
-    tags: ['warm', 'light', 'energy'] },
+    tags: ['warm', 'light', 'energy'],
+    emotion: [0.9, 0.0, 0.4, 0.3, 0.0, 0.6], emotionRadius: 5 },
 
   { name: 'kindling-knot', x: 3.5, y: 0.4, z: -5, color: 0xe67e22,
     meshType: 'torusknot', geometryScale: 0.7, decayRate: 0.05, gainRate: 0.13, revealThreshold: 0.5,
-    tags: ['warm', 'chaos', 'instinct'] },
+    tags: ['warm', 'chaos', 'instinct'],
+    emotion: [0.5, 0.6, 0.2, 0.0, 0.0, 0.9], emotionRadius: 4 },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MID RING — CRYSTALLINE cluster (5-9m, right side)
@@ -104,19 +122,23 @@ const AWAKENING_ENTITIES: EntityDef[] = [
 
   { name: 'lattice-shard', x: -4, y: 1.2, z: -6, color: 0xf1c40f,
     meshType: 'octahedron', decayRate: 0.04, gainRate: 0.14, revealThreshold: 0.5,
-    tags: ['pattern', 'structure', 'light'] },
+    tags: ['pattern', 'structure', 'light'],
+    emotion: [0.1, 0.3, 0.8, 0.2, 0.0, 0.4], emotionRadius: 5 },
 
   { name: 'order-spike', x: -3, y: 2.0, z: -7.5, color: 0xdaa520,
     meshType: 'tetrahedron', geometryScale: 1.3, decayRate: 0.04, gainRate: 0.12, revealThreshold: 0.55,
-    tags: ['pattern', 'structure', 'connection'] },
+    tags: ['pattern', 'structure', 'connection'],
+    emotion: [0.0, 0.4, 0.7, 0.1, 0.0, 0.3], emotionRadius: 5 },
 
   { name: 'facet-gem', x: -5, y: 0.6, z: -5.5, color: 0xe5c07b,
     meshType: 'dodecahedron', geometryScale: 0.8, decayRate: 0.05, gainRate: 0.16, revealThreshold: 0.45,
-    tags: ['pattern', 'light', 'reflection'] },
+    tags: ['pattern', 'light', 'reflection'],
+    emotion: [0.2, 0.1, 0.9, 0.4, 0.0, 0.3], emotionRadius: 4 },
 
   { name: 'crystal-pillar', x: -3.5, y: 1.0, z: -8.5, color: 0xc9b458,
     meshType: 'cylinder', geometryScale: 0.9, decayRate: 0.04, gainRate: 0.11, revealThreshold: 0.55,
-    tags: ['structure', 'rigidity', 'pattern'] },
+    tags: ['structure', 'rigidity', 'pattern'],
+    emotion: [0.0, 0.5, 0.6, 0.0, 0.1, 0.2], emotionRadius: 5 },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MID RING — FLOW / DEPTH cluster (6-9m, rear-center)
@@ -125,15 +147,18 @@ const AWAKENING_ENTITIES: EntityDef[] = [
 
   { name: 'tide-sphere', x: -1, y: 1.0, z: -8, color: 0x4ecdc4,
     meshType: 'sphere', geometryScale: 1.1, decayRate: 0.05, gainRate: 0.13, revealThreshold: 0.5,
-    tags: ['flow', 'depth', 'reflection'] },
+    tags: ['flow', 'depth', 'reflection'],
+    emotion: [0.4, 0.0, 0.5, 0.6, 0.3, 0.2], emotionRadius: 6 },
 
   { name: 'depth-ring', x: 0.5, y: 0.5, z: -9, color: 0x45b7aa,
     meshType: 'torus', geometryScale: 1.2, decayRate: 0.04, gainRate: 0.11, revealThreshold: 0.55,
-    tags: ['flow', 'depth', 'stillness'] },
+    tags: ['flow', 'depth', 'stillness'],
+    emotion: [0.3, 0.0, 0.3, 0.5, 0.5, 0.1], emotionRadius: 6 },
 
   { name: 'still-drop', x: -2, y: 0.3, z: -7, color: 0x2ecc71,
     meshType: 'sphere', geometryScale: 0.6, decayRate: 0.04, gainRate: 0.15, revealThreshold: 0.5,
-    tags: ['depth', 'stillness', 'reflection'] },
+    tags: ['depth', 'stillness', 'reflection'],
+    emotion: [0.3, 0.0, 0.2, 0.3, 0.6, 0.0], emotionRadius: 4 },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FAR RING (11-18m) — Challenging, requires sustained focus
@@ -142,27 +167,33 @@ const AWAKENING_ENTITIES: EntityDef[] = [
 
   { name: 'void-sentinel', x: 0, y: 3.5, z: -16, color: 0x9b59b6,
     meshType: 'octahedron', geometryScale: 1.5, decayRate: 0.02, gainRate: 0.07, revealThreshold: 0.7,
-    tags: ['shadow', 'hidden', 'silence'] },
+    tags: ['shadow', 'hidden', 'silence'],
+    emotion: [0.0, 0.6, 0.4, 0.7, 0.4, 0.0], emotionRadius: 8 },
 
   { name: 'chaos-ember', x: 9, y: 1.2, z: -13, color: 0xe74c3c,
     meshType: 'torusknot', geometryScale: 0.9, decayRate: 0.05, gainRate: 0.09, revealThreshold: 0.6,
-    tags: ['energy', 'chaos', 'instinct', 'heat'] },
+    tags: ['energy', 'chaos', 'instinct', 'heat'],
+    emotion: [0.3, 0.8, 0.1, 0.0, 0.0, 1.0], emotionRadius: 6 },
 
   { name: 'distant-beacon', x: -8, y: 2.5, z: -15, color: 0xf39c12,
     meshType: 'dodecahedron', geometryScale: 1.2, decayRate: 0.03, gainRate: 0.08, revealThreshold: 0.65,
-    tags: ['pattern', 'light', 'connection'] },
+    tags: ['pattern', 'light', 'connection'],
+    emotion: [0.2, 0.1, 0.7, 0.5, 0.0, 0.4], emotionRadius: 7 },
 
   { name: 'shadow-monolith', x: 6, y: 2.0, z: -14, color: 0x5b2c6f,
     meshType: 'cylinder', geometryScale: 1.8, decayRate: 0.02, gainRate: 0.06, revealThreshold: 0.75,
-    tags: ['shadow', 'structure', 'silence'] },
+    tags: ['shadow', 'structure', 'silence'],
+    emotion: [0.0, 0.7, 0.2, 0.5, 0.6, 0.0], emotionRadius: 7 },
 
   { name: 'deep-resonance', x: -5, y: 1.0, z: -17, color: 0x1abc9c,
     meshType: 'sphere', geometryScale: 1.4, decayRate: 0.02, gainRate: 0.07, revealThreshold: 0.7,
-    tags: ['depth', 'flow', 'emotion'] },
+    tags: ['depth', 'flow', 'emotion'],
+    emotion: [0.5, 0.0, 0.3, 0.8, 0.5, 0.2], emotionRadius: 8 },
 
   { name: 'far-whisper', x: 3, y: 0.8, z: -18, color: 0x8e44ad,
     meshType: 'icosahedron', geometryScale: 0.9, decayRate: 0.03, gainRate: 0.06, revealThreshold: 0.7,
-    tags: ['shadow', 'emotion', 'hidden'] },
+    tags: ['shadow', 'emotion', 'hidden'],
+    emotion: [0.1, 0.3, 0.2, 0.4, 0.8, 0.1], emotionRadius: 7 },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ETHEREAL — scattered throughout, barely-there, small, reward sharp eyes
@@ -170,15 +201,18 @@ const AWAKENING_ENTITIES: EntityDef[] = [
 
   { name: 'mote-alpha', x: 1.5, y: 2.5, z: -5.5, color: 0xd5dbdb,
     meshType: 'icosahedron', geometryScale: 0.35, decayRate: 0.1, gainRate: 0.2, revealThreshold: 0.35,
-    tags: ['light', 'surface'] },
+    tags: ['light', 'surface'],
+    emotion: [0.3, 0.0, 0.6, 0.3, 0.0, 0.2], emotionRadius: 3 },
 
   { name: 'mote-beta', x: -2.5, y: 3.0, z: -10, color: 0xaeb6bf,
     meshType: 'icosahedron', geometryScale: 0.3, decayRate: 0.08, gainRate: 0.15, revealThreshold: 0.45,
-    tags: ['silence', 'shadow'] },
+    tags: ['silence', 'shadow'],
+    emotion: [0.0, 0.2, 0.3, 0.2, 0.5, 0.0], emotionRadius: 3 },
 
   { name: 'mote-gamma', x: 5, y: 2.0, z: -8, color: 0xfad7a0,
     meshType: 'icosahedron', geometryScale: 0.4, decayRate: 0.09, gainRate: 0.18, revealThreshold: 0.4,
-    tags: ['warm', 'light'] },
+    tags: ['warm', 'light'],
+    emotion: [0.6, 0.0, 0.4, 0.2, 0.0, 0.5], emotionRadius: 3 },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HIDDEN — Chained discovery. Only spawn after prerequisites are found.
@@ -189,19 +223,22 @@ const AWAKENING_ENTITIES: EntityDef[] = [
   { name: 'synthesis-arch', x: 0, y: 1.5, z: -6.5, color: 0xf0e68c,
     meshType: 'torusknot', geometryScale: 1.0, decayRate: 0.03, gainRate: 0.12, revealThreshold: 0.5,
     tags: ['pattern', 'connection', 'warm'],
-    requiresDiscovery: ['ember-heart', 'lattice-shard'] },
+    requiresDiscovery: ['ember-heart', 'lattice-shard'],
+    emotion: [0.5, 0.1, 0.8, 0.5, 0.0, 0.6], emotionRadius: 6 },
 
   // Appears near the void sentinel once you've found the shadow monolith
   { name: 'void-mirror', x: 1, y: 3.0, z: -15, color: 0xbb8fce,
     meshType: 'dodecahedron', geometryScale: 1.1, decayRate: 0.02, gainRate: 0.1, revealThreshold: 0.6,
     tags: ['shadow', 'reflection', 'hidden'],
-    requiresDiscovery: ['shadow-monolith', 'void-sentinel'] },
+    requiresDiscovery: ['shadow-monolith', 'void-sentinel'],
+    emotion: [0.0, 0.4, 0.5, 0.8, 0.5, 0.0], emotionRadius: 7 },
 
   // The "heart" of the world — appears only after discovering entities from 3+ categories
   { name: 'world-heart', x: 0, y: 1.2, z: -10, color: 0xffffff,
     meshType: 'icosahedron', geometryScale: 1.5, decayRate: 0.01, gainRate: 0.1, revealThreshold: 0.4,
     tags: ['connection', 'light', 'depth', 'pattern'],
-    requiresDiscovery: ['ember-heart', 'lattice-shard', 'tide-sphere'] },
+    requiresDiscovery: ['ember-heart', 'lattice-shard', 'tide-sphere'],
+    emotion: [0.6, 0.0, 0.6, 0.9, 0.2, 0.5], emotionRadius: 10, emotionIntensity: 0.5 },
 ];
 
 // ─── WorldScene ──────────────────────────────────────────────────────────────
@@ -245,6 +282,9 @@ export class WorldScene {
   /** Playtime tracking */
   private playtime = 0;
 
+  /** Debug overlay */
+  private debugOverlay: DebugOverlay | null = null;
+
   /** Save/load notification element */
   private notificationEl: HTMLDivElement | null = null;
   private notificationTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -282,10 +322,15 @@ export class WorldScene {
     this.playerCamera = new FirstPersonCamera();
     this.scene.add(this.playerCamera.body);
 
-    // ─── Systems (order matters: perception → audio → render)
+    // ─── Systems (order matters: perception → emotion → mastery → audio → render)
     this.world.registerSystem(new PerceptionSystem(this.playerCamera, this.scene));
+    this.world.registerSystem(new EmotionSystem(this.playerCamera));
+    this.world.registerSystem(new MasterySystem(this.playerCamera));
     this.world.registerSystem(new AudioSystem(this.playerCamera));
     this.world.registerSystem(new RenderSystem(this.scene));
+
+    // ─── Debug overlay (F3 to toggle)
+    this.debugOverlay = new DebugOverlay(this.events);
 
     // ─── Ground
     this.buildTerrain();
@@ -433,6 +478,22 @@ export class WorldScene {
     const observable = createObservable(adjustedDecay, adjustedGain, adjustedThreshold);
     observable.observationLevel = startingObservation;
     this.world.addComponent(entity, 'observable', observable);
+
+    // Emotional field — entities radiate emotion when discovered
+    if (def.emotion) {
+      this.world.addComponent(entity, 'emotionalField',
+        createEmotionalField(def.emotion, def.emotionRadius ?? 5, def.emotionIntensity ?? 0.3));
+    }
+
+    // Mastery affordance — derived from entity tags
+    const tagDomainMap = MasterySystem.getTagDomainMap();
+    for (const tag of def.tags) {
+      if (tagDomainMap[tag]) {
+        this.world.addComponent(entity, 'masteryAffordance',
+          createMasteryAffordance(tagDomainMap[tag], 0.01, true));
+        break; // One domain per entity
+      }
+    }
   }
 
   // ─── Chained discovery ─────────────────────────────────────────────────────
@@ -515,6 +576,7 @@ export class WorldScene {
   update(dt: number): void {
     this.playerCamera.update(dt);
     this.world.update(dt);
+    this.debugOverlay?.update();
     this.playtime += dt;
   }
 
@@ -622,10 +684,14 @@ export class WorldScene {
     if (this.notificationEl) {
       document.body.removeChild(this.notificationEl);
     }
+    this.debugOverlay?.dispose();
+    this.debugOverlay = null;
 
     // Destroy all ECS systems (stops audio oscillators, cleans up meshes)
     this.world.removeSystem('audio');
     this.world.removeSystem('render');
+    this.world.removeSystem('emotion');
+    this.world.removeSystem('mastery');
     this.world.removeSystem('perception');
 
     // Persist seed progress for constellation display

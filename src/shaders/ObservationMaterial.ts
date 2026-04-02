@@ -24,6 +24,8 @@ const vertexShader = /* glsl */ `
   uniform float uObservation;
   uniform float uTime;
   uniform float uGazeIntensity; // 0 = not gazed, 1 = center gaze with momentum
+  uniform float uResonance;     // -1 = dissonance, 0 = neutral, 1 = full resonance
+  uniform float uMasteryGlow;   // 0..1 — combined mastery influence on this entity
 
   varying vec3 vNormal;
   varying vec3 vWorldPosition;
@@ -106,6 +108,16 @@ const vertexShader = /* glsl */ `
 
     vec3 displaced = position + normal * noise * displacementStrength;
 
+    // Resonance: positive resonance makes geometry "breathe" gently
+    // Dissonance makes geometry jitter/vibrate
+    if (uResonance > 0.05) {
+      float breathe = sin(uTime * 1.5) * uResonance * 0.04;
+      displaced += normal * breathe;
+    } else if (uResonance < -0.05) {
+      float jitter = snoise(position * 8.0 + uTime * 3.0) * abs(uResonance) * 0.03;
+      displaced += normal * jitter;
+    }
+
     vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
     vWorldPosition = worldPos.xyz;
 
@@ -119,6 +131,9 @@ const fragmentShader = /* glsl */ `
   uniform float uObservation;
   uniform float uTime;
   uniform float uGazeIntensity;
+  uniform float uResonance;      // -1..1 — emotional resonance with player
+  uniform float uMasteryGlow;    // 0..1 — mastery system influence
+  uniform vec3 uEmotionTint;     // RGB tint from dominant player emotion
   uniform vec3 uColor;
   uniform vec3 uFogColor;
   uniform float uFogDensity;
@@ -221,6 +236,41 @@ const fragmentShader = /* glsl */ `
     float gazeRim = rim * uGazeIntensity * 0.25;
     litColor += uColor * gazeRim;
 
+    // ─── Emotional resonance effects ──────────────────────────────
+    // Positive resonance: entity glows warmly, colors saturate, gentle pulse
+    if (uResonance > 0.05) {
+      float resPulse = sin(uTime * 2.0 + vWorldPosition.y * 3.0) * 0.5 + 0.5;
+      // Warm glow from resonance — blend toward emotion tint
+      vec3 resonanceGlow = mix(uColor, uEmotionTint, uResonance * 0.4);
+      litColor += resonanceGlow * uResonance * 0.3 * (0.7 + resPulse * 0.3);
+      // Color saturation boost
+      float luminance = dot(litColor, vec3(0.299, 0.587, 0.114));
+      litColor = mix(vec3(luminance), litColor, 1.0 + uResonance * 0.5);
+    }
+    // Negative resonance (dissonance): desaturate, cool shift, visual noise
+    if (uResonance < -0.05) {
+      float dissonance = abs(uResonance);
+      // Desaturate
+      float luminance = dot(litColor, vec3(0.299, 0.587, 0.114));
+      litColor = mix(litColor, vec3(luminance), dissonance * 0.6);
+      // Cool shift (push toward blue)
+      litColor += vec3(-0.05, -0.02, 0.08) * dissonance;
+      // Visual static overlay increases with dissonance
+      float disNoise = hash(vUv * 150.0 + uTime * 8.0);
+      litColor = mix(litColor, vec3(disNoise * 0.2), dissonance * 0.25);
+    }
+
+    // ─── Mastery glow ───────────────────────────────────────────────
+    // Entities in domains the player has mastered gain a subtle inner light
+    if (uMasteryGlow > 0.01) {
+      // Soft pulsing inner glow, frequency increases with mastery level
+      float masteryPulse = sin(uTime * (1.0 + uMasteryGlow * 3.0)) * 0.5 + 0.5;
+      litColor += uColor * uMasteryGlow * 0.25 * (0.6 + masteryPulse * 0.4);
+      // At high mastery, entities gain a subtle secondary color halo
+      float haloRim = pow(rim, 2.0) * uMasteryGlow * 0.4;
+      litColor += uEmotionTint * haloRim;
+    }
+
     // ─── Alpha ───────────────────────────────────────────────────
     // Overall alpha ramps up with observation, modulated by dissolve
     float baseAlpha = smoothstep(0.0, 0.2, uObservation);
@@ -228,6 +278,9 @@ const fragmentShader = /* glsl */ `
 
     // Gaze boosts alpha slightly (easier to see what you're looking at)
     alpha = min(1.0, alpha + uGazeIntensity * 0.1);
+
+    // Resonance boosts alpha (resonant entities are easier to see)
+    alpha = min(1.0, alpha + max(0.0, uResonance) * 0.15);
 
     // ─── Fog (distance-based, matches scene fog) ─────────────────
     float depth = length(vWorldPosition - cameraPosition);
@@ -271,6 +324,9 @@ export function createObservationMaterial(
       uObservation: { value: 0.0 },
       uTime: { value: 0.0 },
       uGazeIntensity: { value: 0.0 },
+      uResonance: { value: 0.0 },
+      uMasteryGlow: { value: 0.0 },
+      uEmotionTint: { value: new THREE.Color(0.5, 0.5, 0.5) },
       uColor: { value: color },
       uFogColor: { value: fogColor },
       uFogDensity: { value: options.fogDensity ?? 0.03 },
@@ -287,16 +343,27 @@ export function createObservationMaterial(
  * This is the ONLY interface between the ECS and the shader.
  *
  * @param gazeIntensity 0 = not being looked at, 1 = center gaze with full momentum
+ * @param resonance -1..1 — emotional resonance between player and this entity
+ * @param masteryGlow 0..1 — mastery system's influence on this entity
+ * @param emotionTint RGB color tint from the player's dominant emotion
  */
 export function updateObservationMaterial(
   material: THREE.ShaderMaterial,
   observationLevel: number,
   time: number,
-  gazeIntensity = 0
+  gazeIntensity = 0,
+  resonance = 0,
+  masteryGlow = 0,
+  emotionTint?: THREE.Color
 ): void {
   material.uniforms.uObservation.value = observationLevel;
   material.uniforms.uTime.value = time;
   material.uniforms.uGazeIntensity.value = gazeIntensity;
+  material.uniforms.uResonance.value = resonance;
+  material.uniforms.uMasteryGlow.value = masteryGlow;
+  if (emotionTint) {
+    material.uniforms.uEmotionTint.value.copy(emotionTint);
+  }
 
   // Enable depth write when mostly solid (prevents transparency sorting artifacts)
   material.depthWrite = observationLevel > 0.7;
