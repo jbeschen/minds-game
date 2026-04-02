@@ -174,3 +174,23 @@ renderer.domElement.addEventListener('click', () => {
     renderer.domElement.requestPointerLock();
   }
 });
+
+// ─── Debug: skip constellation for testing (remove before ship) ──────────────
+
+if (import.meta.env.DEV) {
+  (window as any).__debug = {
+    skipToWorld(seedId = 'ember') {
+      import('./systems/SeedSystem').then(({ AWAKENING_SEEDS }) => {
+        const seed = AWAKENING_SEEDS.find((s) => s.id === seedId) ?? AWAKENING_SEEDS[0];
+        if (phase === 'constellation' || phase === 'title') {
+          constellationScene?.dispose();
+          constellationScene = null;
+          startOverlay.style.display = 'none';
+          seedHint.style.display = 'none';
+          if (!gameLoop.fps) gameLoop.start(); // start loop if not running
+          enterWorld(seed);
+        }
+      });
+    },
+  };
+}

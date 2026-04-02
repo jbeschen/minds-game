@@ -16,7 +16,8 @@
       "@core/*": ["src/core/*"],
       "@systems/*": ["src/systems/*"],
       "@components/*": ["src/components/*"]
-    }
+    },
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }

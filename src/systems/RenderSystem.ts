@@ -1,15 +1,23 @@
 /**
  * RenderSystem — Bridges the ECS world and the Three.js scene.
- * 
+ *
  * Responsibilities:
- * - Creates meshes when entities gain Renderable + Transform components
+ * - Creates meshes with ObservationMaterial when entities gain Renderable + Transform
  * - Updates mesh transforms each frame
- * - Adjusts material opacity based on observation level (perception system hook)
+ * - Drives the observation shader via observable component data
  * - Removes meshes when entities are destroyed
+ *
+ * Plugin guardrail: This system reads `observable` component data to set shader
+ * uniforms. It does NOT import or reference the PerceptionSystem. Communication
+ * is purely through shared component data on the ECS.
  */
 
 import * as THREE from 'three';
 import { System, World, EntityId } from '../core/ECS';
+import {
+  createObservationMaterial,
+  updateObservationMaterial,
+} from '../shaders/ObservationMaterial';
 
 export class RenderSystem implements System {
   name = 'render';
@@ -18,8 +26,26 @@ export class RenderSystem implements System {
   private scene: THREE.Scene;
   private meshes: Map<EntityId, THREE.Mesh> = new Map();
 
+  /** Elapsed time — passed to shaders for animation */
+  private elapsed = 0;
+
+  /** Scene fog color — passed to materials so they blend into the void */
+  private fogColor: THREE.Color;
+
+  /** Scene fog density */
+  private fogDensity: number;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+
+    // Read fog params from scene (or default)
+    if (scene.fog instanceof THREE.FogExp2) {
+      this.fogColor = scene.fog.color;
+      this.fogDensity = scene.fog.density;
+    } else {
+      this.fogColor = new THREE.Color(0x0a0a0f);
+      this.fogDensity = 0.03;
+    }
   }
 
   init(world: World): void {
@@ -35,7 +61,9 @@ export class RenderSystem implements System {
     });
   }
 
-  update(world: World, _dt: number, entities: EntityId[]): void {
+  update(world: World, dt: number, entities: EntityId[]): void {
+    this.elapsed += dt;
+
     for (const id of entities) {
       const transform = world.getComponent(id, 'transform')!;
       const renderable = world.getComponent(id, 'renderable')!;
@@ -54,22 +82,27 @@ export class RenderSystem implements System {
       // Sync transform
       mesh.position.set(transform.x, transform.y, transform.z);
       mesh.rotation.set(transform.rotationX, transform.rotationY, transform.rotationZ);
-      mesh.scale.set(transform.scaleX, transform.scaleY, transform.scaleZ);
 
       // Observation-driven appearance
       const observable = world.getComponent(id, 'observable');
       if (observable) {
-        const mat = mesh.material as THREE.MeshStandardMaterial;
-        mat.opacity = 0.05 + observable.observationLevel * 0.95;
-        mat.transparent = observable.observationLevel < 0.99;
+        // Drive the shader — this is the only interface
+        updateObservationMaterial(
+          mesh.material as THREE.ShaderMaterial,
+          observable.observationLevel,
+          this.elapsed
+        );
 
         // Scale subtly with observation (things become "more real")
-        const obsScale = 0.8 + observable.observationLevel * 0.2;
+        const obsScale = 0.85 + observable.observationLevel * 0.15;
         mesh.scale.set(
           transform.scaleX * obsScale,
           transform.scaleY * obsScale,
           transform.scaleZ * obsScale
         );
+      } else {
+        // Non-observable entities: just sync scale
+        mesh.scale.set(transform.scaleX, transform.scaleY, transform.scaleZ);
       }
     }
   }
@@ -90,10 +123,11 @@ export class RenderSystem implements System {
         break;
     }
 
-    const material = new THREE.MeshStandardMaterial({
+    // Use the observation shader material — data-driven by observation level
+    const material = createObservationMaterial({
       color,
-      transparent: true,
-      opacity: 0.05, // Start nearly invisible — observation brings things into being
+      fogColor: this.fogColor,
+      fogDensity: this.fogDensity,
     });
 
     return new THREE.Mesh(geometry, material);
