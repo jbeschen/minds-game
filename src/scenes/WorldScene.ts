@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import { EventBus, World, FirstPersonCamera } from '../core';
 import { RenderSystem } from '../systems/RenderSystem';
 import { PerceptionSystem } from '../systems/PerceptionSystem';
+import { AudioSystem } from '../systems/AudioSystem';
 import { SeedConfig } from '../systems/SeedSystem';
 import {
   MeshType,
@@ -246,8 +247,9 @@ export class WorldScene {
     this.playerCamera = new FirstPersonCamera();
     this.scene.add(this.playerCamera.body);
 
-    // ─── Systems
+    // ─── Systems (order matters: perception → audio → render)
     this.world.registerSystem(new PerceptionSystem(this.playerCamera, this.scene));
+    this.world.registerSystem(new AudioSystem(this.playerCamera));
     this.world.registerSystem(new RenderSystem(this.scene));
 
     // ─── Ground
