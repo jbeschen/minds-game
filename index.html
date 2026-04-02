@@ -6,9 +6,10 @@
   <title>Minds</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #0a0a0f; color: #ecf0f1; font-family: 'Georgia', serif; }
+    body { overflow: hidden; background: #020208; color: #ecf0f1; font-family: 'Georgia', serif; }
     #app { width: 100vw; height: 100vh; }
-    
+
+    /* ─── Title overlay ─────────────────────────────────────────── */
     #start-overlay {
       position: fixed;
       inset: 0;
@@ -16,12 +17,12 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: #0a0a0f;
+      background: #020208;
       cursor: pointer;
       z-index: 100;
       gap: 24px;
     }
-    
+
     #start-overlay h1 {
       font-size: 3rem;
       font-weight: 300;
@@ -29,19 +30,47 @@
       color: #ecf0f1;
       text-transform: uppercase;
     }
-    
+
     #start-overlay p {
       font-size: 1rem;
       color: #7f8c8d;
       font-style: italic;
     }
-    
+
     #start-overlay .prompt {
       font-size: 0.85rem;
       color: #555;
       margin-top: 40px;
     }
 
+    /* ─── Seed selection hint ───────────────────────────────────── */
+    #seed-hint {
+      position: fixed;
+      bottom: 48px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.9rem;
+      color: #556;
+      font-style: italic;
+      text-align: center;
+      z-index: 20;
+      display: none;
+      pointer-events: none;
+      line-height: 1.6;
+    }
+
+    /* ─── Fade overlay for transitions ─────────────────────────── */
+    #fade-overlay {
+      position: fixed;
+      inset: 0;
+      background: #020208;
+      z-index: 50;
+      opacity: 0;
+      pointer-events: none;
+      transition: none; /* Controlled by JS */
+    }
+
+    /* ─── HUD ───────────────────────────────────────────────────── */
     #hud {
       position: fixed;
       top: 12px;
@@ -50,8 +79,10 @@
       font-size: 12px;
       color: #555;
       z-index: 10;
+      display: none;
     }
 
+    /* ─── Crosshair ─────────────────────────────────────────────── */
     #crosshair {
       position: fixed;
       top: 50%;
@@ -63,21 +94,28 @@
       background: rgba(255, 255, 255, 0.3);
       z-index: 10;
       pointer-events: none;
+      display: none;
     }
   </style>
 </head>
 <body>
   <div id="app"></div>
-  
+
   <div id="start-overlay">
     <h1>Minds</h1>
     <p>What you observe becomes real.</p>
     <span class="prompt">Click to begin</span>
   </div>
 
+  <div id="seed-hint">
+    Choose your seed.<br>
+    <span style="font-size: 0.75rem; color: #334;">Look at an orb and click.</span>
+  </div>
+
+  <div id="fade-overlay"></div>
   <div id="hud"></div>
   <div id="crosshair"></div>
-  
+
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
