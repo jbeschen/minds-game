@@ -23,6 +23,7 @@ import * as THREE from 'three';
 const vertexShader = /* glsl */ `
   uniform float uObservation;
   uniform float uTime;
+  uniform float uGazeIntensity; // 0 = not gazed, 1 = center gaze with momentum
 
   varying vec3 vNormal;
   varying vec3 vWorldPosition;
@@ -117,6 +118,7 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   uniform float uObservation;
   uniform float uTime;
+  uniform float uGazeIntensity;
   uniform vec3 uColor;
   uniform vec3 uFogColor;
   uniform float uFogDensity;
@@ -208,10 +210,24 @@ const fragmentShader = /* glsl */ `
     float shimmerZone = smoothstep(0.35, 0.5, uObservation) * (1.0 - smoothstep(0.5, 0.65, uObservation));
     litColor += uColor * shimmer * shimmerZone * 0.2;
 
+    // ─── Active gaze feedback ─────────────────────────────────────
+    // When the player is looking at this entity, it brightens subtly
+    // This is the "being seen" response — reality acknowledging the observer
+    float gazePulse = sin(uTime * 4.0) * 0.5 + 0.5;
+    float gazeGlow = uGazeIntensity * 0.2 * (0.7 + gazePulse * 0.3);
+    litColor += uColor * gazeGlow;
+
+    // Gaze also tightens the rim (entity "focuses" when observed)
+    float gazeRim = rim * uGazeIntensity * 0.25;
+    litColor += uColor * gazeRim;
+
     // ─── Alpha ───────────────────────────────────────────────────
     // Overall alpha ramps up with observation, modulated by dissolve
     float baseAlpha = smoothstep(0.0, 0.2, uObservation);
     float alpha = baseAlpha * mix(dissolveMask, 1.0, smoothstep(0.4, 0.7, uObservation));
+
+    // Gaze boosts alpha slightly (easier to see what you're looking at)
+    alpha = min(1.0, alpha + uGazeIntensity * 0.1);
 
     // ─── Fog (distance-based, matches scene fog) ─────────────────
     float depth = length(vWorldPosition - cameraPosition);
@@ -254,6 +270,7 @@ export function createObservationMaterial(
     uniforms: {
       uObservation: { value: 0.0 },
       uTime: { value: 0.0 },
+      uGazeIntensity: { value: 0.0 },
       uColor: { value: color },
       uFogColor: { value: fogColor },
       uFogDensity: { value: options.fogDensity ?? 0.03 },
@@ -268,14 +285,18 @@ export function createObservationMaterial(
 /**
  * Update the observation material uniforms each frame.
  * This is the ONLY interface between the ECS and the shader.
+ *
+ * @param gazeIntensity 0 = not being looked at, 1 = center gaze with full momentum
  */
 export function updateObservationMaterial(
   material: THREE.ShaderMaterial,
   observationLevel: number,
-  time: number
+  time: number,
+  gazeIntensity = 0
 ): void {
   material.uniforms.uObservation.value = observationLevel;
   material.uniforms.uTime.value = time;
+  material.uniforms.uGazeIntensity.value = gazeIntensity;
 
   // Enable depth write when mostly solid (prevents transparency sorting artifacts)
   material.depthWrite = observationLevel > 0.7;

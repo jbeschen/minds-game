@@ -86,11 +86,21 @@ export class RenderSystem implements System {
       // Observation-driven appearance
       const observable = world.getComponent(id, 'observable');
       if (observable) {
+        // Calculate gaze intensity for the shader
+        // Combines whether the entity is being looked at + gaze momentum
+        let gazeIntensity = 0;
+        if (observable.isGazed) {
+          const zoneFactor = observable.gazeZone === 'center' ? 1.0 : 0.4;
+          const momentumFactor = Math.min(observable.gazeStreak / 3.0, 1.0);
+          gazeIntensity = zoneFactor * (0.5 + 0.5 * momentumFactor);
+        }
+
         // Drive the shader — this is the only interface
         updateObservationMaterial(
           mesh.material as THREE.ShaderMaterial,
           observable.observationLevel,
-          this.elapsed
+          this.elapsed,
+          gazeIntensity
         );
 
         // Scale subtly with observation (things become "more real")

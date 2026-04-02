@@ -45,6 +45,28 @@ export interface ObservableComponent {
   discovered: boolean;
   /** Total time this entity has been observed (for mastery tracking) */
   totalObserveTime: number;
+
+  // ─── Gaze momentum (Phase 1) ──────────────────────────────────────────────
+  /** Consecutive seconds of sustained focus (resets when gaze leaves) */
+  gazeStreak: number;
+  /** Is this entity currently being gazed at? */
+  isGazed: boolean;
+  /** Gaze zone: 'center' | 'peripheral' | 'none' */
+  gazeZone: 'center' | 'peripheral' | 'none';
+
+  // ─── Decoherence drift (Phase 1) ──────────────────────────────────────────
+  /** Position drift offset — entities wander when unobserved */
+  driftX: number;
+  driftY: number;
+  driftZ: number;
+  /** Drift seed — unique per entity for varied drift patterns */
+  driftSeed: number;
+  /** The "pinned" position — where the entity snaps to when fully observed */
+  anchorX: number;
+  anchorY: number;
+  anchorZ: number;
+  /** Has the anchor been set? */
+  anchorSet: boolean;
 }
 
 export function createObservable(
@@ -59,6 +81,17 @@ export function createObservable(
     revealThreshold,
     discovered: false,
     totalObserveTime: 0,
+    gazeStreak: 0,
+    isGazed: false,
+    gazeZone: 'none',
+    driftX: 0,
+    driftY: 0,
+    driftZ: 0,
+    driftSeed: Math.random() * 1000,
+    anchorX: 0,
+    anchorY: 0,
+    anchorZ: 0,
+    anchorSet: false,
   };
 }
 
