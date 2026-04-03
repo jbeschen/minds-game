@@ -186,7 +186,7 @@ export class EmotionSystem implements System {
     this.trackBehavior(dt);
 
     // ─── 2. Infer emotion from behavior ─────────────────────────────
-    this.inferEmotion(dt);
+    this.inferEmotion(world, dt);
 
     // ─── 3. Blend player vector toward inferred ─────────────────────
     for (let i = 0; i < DIM; i++) {
@@ -274,11 +274,11 @@ export class EmotionSystem implements System {
     b.lastX = pos.x;
     b.lastZ = pos.z;
 
-    // Stillness accumulation
+    // Stillness accumulation — drains quickly when moving
     if (b.smoothSpeed < 0.3) {
       b.stillnessAccum += dt;
     } else {
-      b.stillnessAccum = Math.max(0, b.stillnessAccum - dt * 0.5);
+      b.stillnessAccum = Math.max(0, b.stillnessAccum - dt * 2.0);
     }
 
     // Discovery rate decay
@@ -297,17 +297,26 @@ export class EmotionSystem implements System {
 
   // ─── Emotion Inference ──────────────────────────────────────────────────
 
-  private inferEmotion(_dt: number): void {
+  private inferEmotion(world: World, _dt: number): void {
     const b = this.behavior;
     const inf = this.inferredVector;
 
+    // Check if currently gazed entity is already known
+    const activelyGazing = this.gazedEntityId != null;
+    let gazingAtDiscovered = false;
+    if (activelyGazing && this.gazedEntityId != null) {
+      const obs = world.getComponent(this.gazedEntityId, 'observable');
+      gazingAtDiscovered = obs?.discovered ?? false;
+    }
+
     // [0] Warmth — intentional revisitation (not drive-by), slow movement, stillness
-    // Only count revisits if player has been moving slowly recently
+    // Gazing at a discovered entity = returning to something known = warm
     const intentionalRevisits = b.smoothSpeed < 1.5 ? b.revisitCount : 0;
     inf[0] = clamp01(
       intentionalRevisits * 0.08 +
       (b.stillnessAccum > 5 ? 0.3 : 0) +
-      (b.smoothSpeed < 0.3 ? 0.15 : 0)
+      (b.smoothSpeed < 0.3 ? 0.15 : 0) +
+      (gazingAtDiscovered ? 0.35 : 0)
     );
 
     // [1] Tension — very fast/erratic movement only; no-discovery frustration
@@ -321,12 +330,13 @@ export class EmotionSystem implements System {
     );
 
     // [2] Curiosity — gaze variety, exploration, or active study
-    // Actively gazing at something = still curious (studying), even if not moving
-    const activelyGazing = this.gazedEntityId != null;
+    // Gazing at undiscovered = high curiosity; revisiting familiar = damped
+    const gazeBonus = activelyGazing ? (gazingAtDiscovered ? 0.15 : 0.4) : 0;
+    const familiarityDamper = gazingAtDiscovered ? 0.55 : 1.0;
     inf[2] = clamp01(
-      b.gazeVariety.size * 0.08 +
+      (b.gazeVariety.size * 0.08 +
       (b.smoothSpeed > 0.5 && b.smoothSpeed < 4 ? 0.3 : 0) +
-      (activelyGazing ? 0.4 : 0)
+      gazeBonus) * familiarityDamper
     );
 
     // [3] Awe — recent discoveries, stillness after discovery
@@ -338,11 +348,13 @@ export class EmotionSystem implements System {
     // [4] Melancholy — very long stillness WITHOUT focus, prolonged fruitless searching
     // Active observation (gazing at something) gates stillness-melancholy:
     // staring intently = curiosity/focus, not sadness
+    // High energy/curiosity suppresses melancholy — you can't be sad while actively engaged
     const unfocusedStillness = !activelyGazing && b.stillnessAccum > 20;
+    const engagementSuppression = Math.max(inf[2], inf[5]); // curiosity or energy
     inf[4] = clamp01(
-      (unfocusedStillness ? 0.3 : 0) +
+      ((unfocusedStillness ? 0.3 : 0) +
       (undiscoveredRemain && b.timeSinceDiscovery > 60 ? 0.25 : 0) +
-      intentionalRevisits * 0.04
+      intentionalRevisits * 0.04) * (1 - engagementSuppression * 0.7)
     );
 
     // [5] Energy — movement speed, discovery rate
