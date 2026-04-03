@@ -40,8 +40,11 @@ import { FirstPersonCamera } from '../core/FirstPersonCamera';
 /** Number of emotion dimensions */
 const DIM = 6;
 
-/** How quickly the player vector drifts toward inferred state (per second) */
-const INFERENCE_RATE = 0.15;
+/** How quickly the player vector rises toward inferred state (per second) */
+const INFERENCE_RATE_UP = 0.3;
+
+/** How quickly the player vector falls — feelings linger (per second) */
+const INFERENCE_RATE_DOWN = 0.08;
 
 /** How quickly emotion decays toward neutral (per second) */
 const DECAY_RATE = 0.02;
@@ -68,6 +71,8 @@ interface BehaviorState {
   revisitCount: number;
   /** Entities we've gazed at before (for revisit tracking) */
   previouslyGazed: Set<number>;
+  /** Last gaze timestamp per entity (for revisit debounce) */
+  lastGazeTimePerEntity: Map<number, number>;
   /** Position last frame */
   lastX: number;
   lastZ: number;
@@ -108,10 +113,19 @@ export class EmotionSystem implements System {
     discoveryRate: 0,
     revisitCount: 0,
     previouslyGazed: new Set(),
+    lastGazeTimePerEntity: new Map(),
     lastX: 0,
     lastZ: 0,
     windowTimer: 0,
   };
+
+  /** Discovery completion tracking — tension shouldn't penalize an empty well */
+  private totalDiscovered = 0;
+  private totalObservable = 0;
+
+  /** Currently gazed entity info (for debug overlay) */
+  private gazedEntityId: number | null = null;
+  private gazedEntityName: string = '';
 
   /** Seed starting vector (sets initial emotional tone) */
   private seedVector: number[] = [...NEUTRAL];
@@ -132,6 +146,7 @@ export class EmotionSystem implements System {
     // Track discoveries for awe/energy inference
     world.events.on('perception:entity_discovered', () => {
       this.behavior.timeSinceDiscovery = 0;
+      this.totalDiscovered++;
       // Smooth discovery rate: exponential moving average
       this.behavior.discoveryRate = this.behavior.discoveryRate * 0.7 + 0.3 * 2.0; // bump
     });
@@ -139,10 +154,20 @@ export class EmotionSystem implements System {
     // Track gaze for curiosity/warmth inference
     world.events.on('perception:gaze_start', (e) => {
       this.behavior.gazeVariety.add(e.entityId);
-      if (this.behavior.previouslyGazed.has(e.entityId)) {
+      this.gazedEntityId = e.entityId;
+      // Debounce revisits: re-gazing the same entity within 5s is flicker, not revisitation
+      const lastGazeTime = this.behavior.lastGazeTimePerEntity.get(e.entityId) ?? -10;
+      const now = performance.now() / 1000;
+      if (this.behavior.previouslyGazed.has(e.entityId) && (now - lastGazeTime) > 5) {
         this.behavior.revisitCount++;
       }
       this.behavior.previouslyGazed.add(e.entityId);
+      this.behavior.lastGazeTimePerEntity.set(e.entityId, now);
+    });
+
+    world.events.on('perception:gaze_end', () => {
+      this.gazedEntityId = null;
+      this.gazedEntityName = '';
     });
 
     // Initialize position tracking
@@ -152,6 +177,11 @@ export class EmotionSystem implements System {
   }
 
   update(world: World, dt: number, _entities: EntityId[]): void {
+    // Count total observable (once)
+    if (this.totalObservable === 0) {
+      this.totalObservable = world.query('observable').length;
+    }
+
     // ─── 1. Track player behavior ───────────────────────────────────
     this.trackBehavior(dt);
 
@@ -160,8 +190,10 @@ export class EmotionSystem implements System {
 
     // ─── 3. Blend player vector toward inferred ─────────────────────
     for (let i = 0; i < DIM; i++) {
-      // Drift toward inferred state
-      this.playerVector[i] += (this.inferredVector[i] - this.playerVector[i]) * INFERENCE_RATE * dt;
+      // Drift toward inferred state — asymmetric: fast to feel, slow to fade
+      const rising = this.inferredVector[i] > this.playerVector[i];
+      const rate = rising ? INFERENCE_RATE_UP : INFERENCE_RATE_DOWN;
+      this.playerVector[i] += (this.inferredVector[i] - this.playerVector[i]) * rate * dt;
       // Gentle decay toward neutral
       this.playerVector[i] += (NEUTRAL[i] - this.playerVector[i]) * DECAY_RATE * dt;
       // Clamp
@@ -223,6 +255,8 @@ export class EmotionSystem implements System {
       dominantEmotion: this.dominantEmotion,
       peakResonance: this.peakResonance,
       entityResonance: resonanceMap,
+      gazedEntityId: this.gazedEntityId,
+      allDiscovered: this.totalDiscovered >= this.totalObservable,
     });
   }
 
@@ -267,24 +301,32 @@ export class EmotionSystem implements System {
     const b = this.behavior;
     const inf = this.inferredVector;
 
-    // [0] Warmth — revisitation, slow movement, close observation
+    // [0] Warmth — intentional revisitation (not drive-by), slow movement, stillness
+    // Only count revisits if player has been moving slowly recently
+    const intentionalRevisits = b.smoothSpeed < 1.5 ? b.revisitCount : 0;
     inf[0] = clamp01(
-      b.revisitCount * 0.1 +
-      (b.stillnessAccum > 3 ? 0.3 : 0) +
-      (b.smoothSpeed < 1 ? 0.2 : 0)
+      intentionalRevisits * 0.08 +
+      (b.stillnessAccum > 5 ? 0.3 : 0) +
+      (b.smoothSpeed < 0.3 ? 0.15 : 0)
     );
 
-    // [1] Tension — fast movement, no discoveries for a while
+    // [1] Tension — very fast/erratic movement only; no-discovery frustration
+    // Running at normal exploration speed (1.5–4) should NOT be tense
+    // Don't penalize for "no discoveries" if everything has been found
+    const undiscoveredRemain = this.totalDiscovered < this.totalObservable;
     inf[1] = clamp01(
-      (b.smoothSpeed > 3 ? 0.4 : 0) +
-      (b.timeSinceDiscovery > 20 ? 0.3 : 0) +
-      (b.smoothSpeed > 1.5 ? b.smoothSpeed * 0.1 : 0)
+      (b.smoothSpeed > 5 ? 0.4 : 0) +
+      (undiscoveredRemain && b.timeSinceDiscovery > 45 ? 0.25 : 0) +
+      (b.smoothSpeed > 4 ? (b.smoothSpeed - 4) * 0.1 : 0)
     );
 
-    // [2] Curiosity — gaze variety, exploration breadth
+    // [2] Curiosity — gaze variety, exploration, or active study
+    // Actively gazing at something = still curious (studying), even if not moving
+    const activelyGazing = this.gazedEntityId != null;
     inf[2] = clamp01(
       b.gazeVariety.size * 0.08 +
-      (b.smoothSpeed > 0.5 && b.smoothSpeed < 3 ? 0.3 : 0)
+      (b.smoothSpeed > 0.5 && b.smoothSpeed < 4 ? 0.3 : 0) +
+      (activelyGazing ? 0.4 : 0)
     );
 
     // [3] Awe — recent discoveries, stillness after discovery
@@ -293,17 +335,20 @@ export class EmotionSystem implements System {
       (b.timeSinceDiscovery < 5 && b.stillnessAccum > 1 ? 0.4 : 0)
     );
 
-    // [4] Melancholy — long stillness, low discovery, revisitation
+    // [4] Melancholy — very long stillness WITHOUT focus, prolonged fruitless searching
+    // Active observation (gazing at something) gates stillness-melancholy:
+    // staring intently = curiosity/focus, not sadness
+    const unfocusedStillness = !activelyGazing && b.stillnessAccum > 20;
     inf[4] = clamp01(
-      (b.stillnessAccum > 8 ? 0.3 : 0) +
-      (b.timeSinceDiscovery > 30 ? 0.3 : 0) +
-      b.revisitCount * 0.05
+      (unfocusedStillness ? 0.3 : 0) +
+      (undiscoveredRemain && b.timeSinceDiscovery > 60 ? 0.25 : 0) +
+      intentionalRevisits * 0.04
     );
 
     // [5] Energy — movement speed, discovery rate
     inf[5] = clamp01(
-      b.smoothSpeed * 0.12 +
-      b.discoveryRate * 0.2
+      b.smoothSpeed * 0.15 +
+      b.discoveryRate * 0.25
     );
   }
 

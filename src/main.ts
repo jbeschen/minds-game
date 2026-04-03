@@ -219,5 +219,18 @@ if (import.meta.env.DEV) {
         }
       });
     },
+    /** Wipe all persistent data (seed progress, saves) and reload */
+    resetAll() {
+      localStorage.removeItem('minds_seed_progress');
+      localStorage.removeItem('minds_save');
+      console.log('🗑 All persistent data wiped. Reloading...');
+      location.reload();
+    },
+    /** Wipe seed progress only (constellation resets to unexplored) */
+    resetProgress() {
+      localStorage.removeItem('minds_seed_progress');
+      console.log('🗑 Seed progress wiped. Reloading...');
+      location.reload();
+    },
   };
 }

@@ -13,12 +13,17 @@
  */
 
 import { EventBus } from '../core/EventBus';
+import { World } from '../core/ECS';
 
 const EMOTION_NAMES = ['warmth', 'tension', 'curiosity', 'awe', 'melancholy', 'energy'];
 
 export class DebugOverlay {
   private el: HTMLDivElement;
   private visible = false;
+  private world: World;
+
+  // Session timer
+  private elapsed = 0;
 
   // Cached state from events
   private playerVector: number[] = [0, 0, 0, 0, 0, 0];
@@ -26,10 +31,18 @@ export class DebugOverlay {
   private peakResonance = 0;
   private masteryLevels: Record<string, number> = {};
   private activeSynergies: string[] = [];
+  private allDiscovered = false;
+
+  // Gazed entity info
+  private gazedEntityId: number | null = null;
+  private gazedEntityName: string = '';
+  private gazedEntityEmotion: number[] | null = null;
+  private gazedEntityResonance = 0;
 
   private unsubs: (() => void)[] = [];
 
-  constructor(events: EventBus) {
+  constructor(events: EventBus, world: World, private entityNames: Map<number, string>) {
+    this.world = world;
     // Create DOM element
     this.el = document.createElement('div');
     Object.assign(this.el.style, {
@@ -58,6 +71,21 @@ export class DebugOverlay {
         this.playerVector = e.playerVector ?? this.playerVector;
         this.dominantEmotion = e.dominantEmotion ?? this.dominantEmotion;
         this.peakResonance = e.peakResonance ?? this.peakResonance;
+        this.allDiscovered = e.allDiscovered ?? false;
+        // Update gazed entity info
+        const gid = e.gazedEntityId;
+        if (gid != null) {
+          this.gazedEntityId = gid;
+          this.gazedEntityName = this.entityNames.get(gid) ?? `#${gid}`;
+          const field = this.world.getComponent(gid, 'emotionalField');
+          this.gazedEntityEmotion = field?.vector ?? null;
+          this.gazedEntityResonance = e.entityResonance?.[gid] ?? 0;
+        } else {
+          this.gazedEntityId = null;
+          this.gazedEntityName = '';
+          this.gazedEntityEmotion = null;
+          this.gazedEntityResonance = 0;
+        }
       }),
       events.on('mastery:state_updated', (e) => {
         this.masteryLevels = e.levels ?? this.masteryLevels;
@@ -75,45 +103,131 @@ export class DebugOverlay {
       this.visible = !this.visible;
       this.el.style.display = this.visible ? 'block' : 'none';
     }
+    if (e.code === 'F4') {
+      e.preventDefault();
+      const text = this.buildLines().join('\n');
+      navigator.clipboard.writeText(text).then(() => {
+        console.log('📋 Debug snapshot copied to clipboard');
+      });
+    }
   };
 
-  update(): void {
-    if (!this.visible) return;
+  private formatTime(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
 
+  private buildLines(): string[] {
     const lines: string[] = [];
+    lines.push(`t=${this.formatTime(this.elapsed)}`);
+    lines.push('');
 
     // ─── Emotion ───────────────────────────────────
-    lines.push('═══ EMOTION ═══');
+    lines.push('EMOTION');
+    for (let i = 0; i < EMOTION_NAMES.length; i++) {
+      const val = this.playerVector[i] ?? 0;
+      const marker = i === this.dominantEmotion ? ' ◄' : '';
+      lines.push(`  ${EMOTION_NAMES[i].padEnd(12)} ${val.toFixed(3)}${marker}`);
+    }
+    lines.push(`  resonance     ${this.peakResonance >= 0 ? '+' : ''}${this.peakResonance.toFixed(3)}`);
+    if (this.allDiscovered) {
+      lines.push('  (all discovered)');
+    }
+
+    // ─── Gazed Entity ──────────────────────────────
+    if (this.gazedEntityId != null) {
+      lines.push('');
+      lines.push(`GAZING: ${this.gazedEntityName}`);
+      if (this.gazedEntityEmotion) {
+        for (let i = 0; i < EMOTION_NAMES.length; i++) {
+          const val = this.gazedEntityEmotion[i] ?? 0;
+          lines.push(`  ${EMOTION_NAMES[i].padEnd(12)} ${val.toFixed(2)}`);
+        }
+      }
+      lines.push(`  resonance     ${this.gazedEntityResonance >= 0 ? '+' : ''}${this.gazedEntityResonance.toFixed(3)}`);
+      const affordance = this.world.getComponent(this.gazedEntityId, 'masteryAffordance');
+      if (affordance) {
+        lines.push(`  domain        ${affordance.domain}`);
+      }
+    }
+
+    // ─── Mastery ───────────────────────────────────
+    lines.push('');
+    lines.push('MASTERY');
+    const domains = Object.keys(this.masteryLevels).sort();
+    for (const domain of domains) {
+      const val = this.masteryLevels[domain];
+      lines.push(`  ${domain.padEnd(12)} ${val.toFixed(3)}`);
+    }
+
+    if (this.activeSynergies.length > 0) {
+      lines.push('  synergies:');
+      for (const s of this.activeSynergies) {
+        lines.push(`    ${s}`);
+      }
+    }
+
+    return lines;
+  }
+
+  update(dt: number): void {
+    this.elapsed += dt;
+    if (!this.visible) return;
+
+    const lines = this.buildLines();
+
+    // Add visual bars and footer for on-screen display
+    const displayLines: string[] = [];
+    displayLines.push(`t=${this.formatTime(this.elapsed)}`);
+    displayLines.push('');
+    displayLines.push('═══ EMOTION ═══');
     for (let i = 0; i < EMOTION_NAMES.length; i++) {
       const val = this.playerVector[i] ?? 0;
       const bar = this.bar(val);
       const marker = i === this.dominantEmotion ? ' ◄' : '';
-      lines.push(`  ${EMOTION_NAMES[i].padEnd(12)} ${bar} ${val.toFixed(3)}${marker}`);
+      displayLines.push(`  ${EMOTION_NAMES[i].padEnd(12)} ${bar} ${val.toFixed(3)}${marker}`);
     }
-    lines.push(`  resonance     ${this.peakResonance >= 0 ? '+' : ''}${this.peakResonance.toFixed(3)}`);
-    lines.push('');
+    displayLines.push(`  resonance     ${this.peakResonance >= 0 ? '+' : ''}${this.peakResonance.toFixed(3)}`);
+    if (this.allDiscovered) {
+      displayLines.push('  (all discovered)');
+    }
+    displayLines.push('');
 
-    // ─── Mastery ───────────────────────────────────
-    lines.push('═══ MASTERY ═══');
+    if (this.gazedEntityId != null) {
+      displayLines.push(`═══ GAZING: ${this.gazedEntityName} ═══`);
+      if (this.gazedEntityEmotion) {
+        for (let i = 0; i < EMOTION_NAMES.length; i++) {
+          const val = this.gazedEntityEmotion[i] ?? 0;
+          displayLines.push(`  ${EMOTION_NAMES[i].padEnd(12)} ${val.toFixed(2)}`);
+        }
+      }
+      displayLines.push(`  resonance     ${this.gazedEntityResonance >= 0 ? '+' : ''}${this.gazedEntityResonance.toFixed(3)}`);
+      const affordance = this.world.getComponent(this.gazedEntityId, 'masteryAffordance');
+      if (affordance) {
+        displayLines.push(`  domain        ${affordance.domain}`);
+      }
+      displayLines.push('');
+    }
+
+    displayLines.push('═══ MASTERY ═══');
     const domains = Object.keys(this.masteryLevels).sort();
     for (const domain of domains) {
       const val = this.masteryLevels[domain];
       const bar = this.bar(val);
-      lines.push(`  ${domain.padEnd(12)} ${bar} ${val.toFixed(3)}`);
+      displayLines.push(`  ${domain.padEnd(12)} ${bar} ${val.toFixed(3)}`);
     }
-
     if (this.activeSynergies.length > 0) {
-      lines.push('');
-      lines.push('  synergies:');
+      displayLines.push('');
+      displayLines.push('  synergies:');
       for (const s of this.activeSynergies) {
-        lines.push(`    ✦ ${s}`);
+        displayLines.push(`    ✦ ${s}`);
       }
     }
+    displayLines.push('');
+    displayLines.push('[F3] toggle  [F4] copy snapshot');
 
-    lines.push('');
-    lines.push('[F3] toggle debug');
-
-    this.el.textContent = lines.join('\n');
+    this.el.textContent = displayLines.join('\n');
   }
 
   private bar(value: number, width = 12): string {

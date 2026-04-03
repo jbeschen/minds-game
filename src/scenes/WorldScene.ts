@@ -330,7 +330,7 @@ export class WorldScene {
     this.world.registerSystem(new RenderSystem(this.scene));
 
     // ─── Debug overlay (F3 to toggle)
-    this.debugOverlay = new DebugOverlay(this.events);
+    this.debugOverlay = new DebugOverlay(this.events, this.world, this.entityIdToName);
 
     // ─── Ground
     this.buildTerrain();
@@ -576,7 +576,7 @@ export class WorldScene {
   update(dt: number): void {
     this.playerCamera.update(dt);
     this.world.update(dt);
-    this.debugOverlay?.update();
+    this.debugOverlay?.update(dt);
     this.playtime += dt;
   }
 

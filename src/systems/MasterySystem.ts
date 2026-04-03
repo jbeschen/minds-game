@@ -112,6 +112,9 @@ export class MasterySystem implements System {
   private domains: Map<MasteryDomain, DomainState> = new Map();
   private activeSynergies: Set<string> = new Set();
 
+  /** Currently gazed entity (for sustained observation mastery) */
+  private currentGazeEntityId: number | null = null;
+
   /** Behavior inference state */
   private smoothSpeed = 0;
   private stillnessTime = 0;
@@ -170,6 +173,15 @@ export class MasterySystem implements System {
       }
     });
 
+    // ─── Sustained gaze grants slow observation mastery ─────────────
+    // Even after discovery, continued observation is practice
+    world.events.on('perception:gaze_start', (e) => {
+      this.currentGazeEntityId = e.entityId;
+    });
+    world.events.on('perception:gaze_end', () => {
+      this.currentGazeEntityId = null;
+    });
+
     // ─── Discovery grants mastery in the entity's primary domain ────
     world.events.on('perception:entity_discovered', (e) => {
       // Look up entity tags to determine domain
@@ -224,7 +236,7 @@ export class MasterySystem implements System {
       this.stillnessTime += dt;
       if (this.stillnessTime > 3) {
         // After 3s of stillness, start gaining stillness mastery
-        this.grantDomainCredit(world, 'stillness', -1, 0.005 * dt);
+        this.grantDomainCredit(world, 'stillness', -1, 0.015 * dt);
       }
     } else {
       this.stillnessTime = 0;
@@ -233,6 +245,16 @@ export class MasterySystem implements System {
     // Movement mastery: reward active exploration
     if (this.smoothSpeed > 2) {
       this.grantDomainCredit(world, 'movement', -1, 0.003 * dt);
+    }
+
+    // Sustained gaze mastery: continued observation is practice
+    if (this.currentGazeEntityId != null) {
+      this.grantDomainCredit(world, 'observation', this.currentGazeEntityId, 0.008 * dt, true);
+      // Also grant the entity's specific domain
+      const affordance = world.getComponent(this.currentGazeEntityId, 'masteryAffordance');
+      if (affordance) {
+        this.grantDomainCredit(world, affordance.domain as MasteryDomain, this.currentGazeEntityId, 0.005 * dt, true);
+      }
     }
 
     // ─── Update domain states ───────────────────────────────────────
@@ -303,15 +325,17 @@ export class MasterySystem implements System {
     world: World,
     domain: MasteryDomain,
     entityId: number,
-    amount: number
+    amount: number,
+    continuous = false
   ): void {
     const state = this.domains.get(domain);
     if (!state) return;
-    if (state.cooldown > 0 && entityId !== -1) return;
+    // Continuous per-frame ticks (like sustained gaze) bypass cooldown
+    if (state.cooldown > 0 && entityId !== -1 && !continuous) return;
 
     // Variation tracking: same entity = diminishing returns
     let variationMultiplier = 1;
-    if (entityId !== -1) {
+    if (entityId !== -1 && !continuous) {
       if (entityId === state.lastPracticeEntityId) {
         state.sameEntityStreak++;
         variationMultiplier = 1 / (1 + state.sameEntityStreak * 0.3);
